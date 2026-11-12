@@ -1,0 +1,18 @@
+# Solo para desarrollo local: levanta Postgres en el puerto 5433.
+#   docker compose -f docker-compose.dev.yml up -d
+name: icmspy-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: icmspy
+      POSTGRES_PASSWORD: icmspy
+      POSTGRES_DB: icmspy
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

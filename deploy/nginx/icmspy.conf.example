@@ -1,0 +1,29 @@
+# Ejemplo de sitio Nginx para icmSpy.
+#
+#   1. Copiar a /etc/nginx/sites-available/icmspy y cambiar spy.tudominio.com.
+#   2. ln -s /etc/nginx/sites-available/icmspy /etc/nginx/sites-enabled/
+#   3. nginx -t && systemctl reload nginx
+#   4. certbot --nginx -d spy.tudominio.com   (agrega el bloque 443 y el certificado)
+#
+# Es un archivo nuevo: no modifica los sitios que ya existen en el VPS.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name spy.tudominio.com;
+
+    # Herramienta interna: que no la indexen los buscadores.
+    add_header X-Robots-Tag "noindex, nofollow" always;
+
+    client_max_body_size 20m;   # cargas de CSV
+
+    location / {
+        proxy_pass http://127.0.0.1:3020;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+    }
+}
