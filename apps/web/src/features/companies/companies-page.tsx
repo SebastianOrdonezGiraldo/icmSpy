@@ -23,7 +23,11 @@ export function CompaniesPage() {
     <div className="space-y-4">
       <div className="flex items-baseline justify-between">
         <h1 className="text-2xl font-semibold">Empresas</h1>
-        {data && <span className="text-sm text-muted-foreground">{data.total} {data.total === 1 ? "resultado" : "resultados"}</span>}
+        {data && (
+          <span className="text-sm text-muted-foreground">
+            {data.total} {data.total === 1 ? "resultado" : "resultados"}
+          </span>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
