@@ -1,0 +1,24 @@
+{
+  "name": "icmspy",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @icmspy/api --filter @icmspy/web dev",
+    "dev:worker": "pnpm --filter @icmspy/api dev:worker",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "db:generate": "pnpm --filter @icmspy/db generate",
+    "db:migrate": "pnpm --filter @icmspy/db migrate",
+    "db:studio": "pnpm --filter @icmspy/db studio",
+    "seed:admin": "pnpm --filter @icmspy/api seed:admin"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7",
+    "typescript": "^5.9.3"
+  }
+}
