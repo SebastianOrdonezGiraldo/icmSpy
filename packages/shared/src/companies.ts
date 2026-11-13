@@ -47,6 +47,8 @@ export interface CompanyListItem {
   department: string | null;
   companyType: CompanyType;
   contactCount: number;
+  /** Sedes registradas (por ejemplo, sedes REPS). */
+  siteCount: number;
 }
 
 export interface CompanyListResponse {
@@ -59,18 +61,41 @@ export interface CompanyListResponse {
 export interface ContactPointDetail {
   id: string;
   kind: ContactKind;
+  /** Tal como lo publica la fuente. */
   value: string;
+  /** Normalizado (correo en minúsculas, teléfono en E.164 con el indicativo vigente). */
+  valueNormalized: string;
   isRoleAddress: boolean;
   validationStatus: ValidationStatus;
   isPrimary: boolean;
-  /** De dónde salió el dato: fuente y, si aplica, URL exacta. */
-  sources: { sourceKey: string; url: string | null; observedAt: string }[];
+  /** Sedes donde la fuente publica este contacto. Vacío si es un contacto de la empresa. */
+  siteIds: string[];
+  /** De dónde salió el dato: fuente, campo de la fuente y, si aplica, URL exacta. */
+  sources: { sourceKey: string; field: string; url: string | null; observedAt: string }[];
 }
 
-export interface CompanyDetail extends Omit<CompanyListItem, "contactCount"> {
+/** Sede o punto de atención de una empresa, tal como lo publica una fuente. */
+export interface CompanySiteDetail {
+  id: string;
+  sourceKey: string;
+  /** Identificador de la sede en la fuente (en REPS, código de habilitación). */
+  externalId: string;
+  name: string;
+  address: string | null;
+  cityCode: string | null;
+  city: string | null;
+  department: string | null;
+  /** Fecha de corte de la fuente con la que se vio la sede por última vez. */
+  sourceCutoffAt: string | null;
+  /** URL reproducible del registro en la fuente. */
+  sourceUrl: string | null;
+}
+
+export interface CompanyDetail extends Omit<CompanyListItem, "contactCount" | "siteCount"> {
   cityCode: string | null;
   ciiuCodes: string[];
   createdAt: string;
+  sites: CompanySiteDetail[];
   contactPoints: ContactPointDetail[];
 }
 

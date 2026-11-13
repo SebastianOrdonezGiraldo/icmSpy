@@ -7,6 +7,7 @@ import type { AppContext } from "./context";
 import { type AuthVariables, requireAuth } from "./modules/auth";
 import { companiesRoutes } from "./modules/companies";
 import { adapters } from "./modules/discovery";
+import { searchRunsRoutes } from "./modules/search-runs";
 
 export function createApp(ctx: AppContext) {
   const app = new Hono();
@@ -29,15 +30,19 @@ export function createApp(ctx: AppContext) {
     .get("/me", (c) => c.json(c.get("user")))
     .get("/sources", (c) =>
       c.json(
-        adapters.map(({ key, name, legalBasis, capabilities }) => ({
+        adapters.map(({ key, name, legalBasis, capabilities, operational, searchCoverage }) => ({
           key,
           name,
           legalBasis,
           capabilities,
+          // Solo las operativas se consultan en el buscador; el resto está pendiente.
+          operational,
+          searchCoverage: searchCoverage ?? null,
         })),
       ),
     )
-    .route("/companies", companiesRoutes(ctx));
+    .route("/companies", companiesRoutes(ctx))
+    .route("/search-runs", searchRunsRoutes(ctx));
 
   app.route("/api", api);
   app.all("/api/*", (c) => c.json({ error: "No encontrado" }, 404));

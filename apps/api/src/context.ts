@@ -1,4 +1,5 @@
 import { createDb, type Db } from "@icmspy/db";
+import type pg from "pg";
 import type { Env } from "./env";
 import { createQueue, type Queue } from "./lib/queue";
 import { type Auth, createAuth } from "./modules/auth";
@@ -7,6 +8,8 @@ import { type Auth, createAuth } from "./modules/auth";
 export interface AppContext {
   env: Env;
   db: Db;
+  /** Pool de `db`. Solo para transacciones que deben compartir cliente con la cola. */
+  pool: pg.Pool;
   queue: Queue;
   auth: Auth;
   close(): Promise<void>;
@@ -19,6 +22,7 @@ export function createContext(env: Env): AppContext {
   return {
     env,
     db,
+    pool,
     queue,
     auth,
     async close() {

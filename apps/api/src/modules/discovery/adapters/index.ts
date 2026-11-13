@@ -12,6 +12,16 @@ export const adapters: readonly SourceAdapter[] = [
   websiteAdapter,
 ];
 
+/**
+ * Fuentes que el buscador de empresas consulta: solo adaptadores operativos
+ * que saben buscar e interpretar registros. Un esqueleto nunca aparece aquí.
+ */
+export function searchableAdapters(registry: readonly SourceAdapter[] = adapters) {
+  return registry.filter(
+    (a) => a.operational && a.capabilities.includes("discover") && a.discover && a.resolve,
+  );
+}
+
 export function getAdapter(key: string): SourceAdapter {
   const adapter = adapters.find((a) => a.key === key);
   if (!adapter) throw new Error(`Fuente desconocida: ${key}`);

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { apiGet } from "@/lib/api";
+import { CompanySearch } from "../search-runs/company-search";
 import { useCompanyFilters } from "./filters-store";
 
 export function CompaniesPage() {
@@ -21,11 +22,20 @@ export function CompaniesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-baseline justify-between">
-        <h1 className="text-2xl font-semibold">Empresas</h1>
+      <h1 className="text-2xl font-semibold">Empresas</h1>
+
+      <CompanySearch />
+
+      <div className="flex items-baseline justify-between pt-4">
+        <div>
+          <h2 className="text-lg font-semibold">Catálogo de empresas</h2>
+          <p className="text-sm text-muted-foreground">
+            Todas las empresas guardadas por cualquier búsqueda, no solo la de arriba.
+          </p>
+        </div>
         {data && (
           <span className="text-sm text-muted-foreground">
-            {data.total} {data.total === 1 ? "resultado" : "resultados"}
+            {data.total} {data.total === 1 ? "empresa" : "empresas"}
           </span>
         )}
       </div>
@@ -68,6 +78,7 @@ export function CompaniesPage() {
               <th className="px-4 py-2 font-medium">NIT</th>
               <th className="px-4 py-2 font-medium">Tipo</th>
               <th className="px-4 py-2 font-medium">Ciudad</th>
+              <th className="px-4 py-2 text-right font-medium">Sedes</th>
               <th className="px-4 py-2 text-right font-medium">Contactos</th>
             </tr>
           </thead>
@@ -88,6 +99,7 @@ export function CompaniesPage() {
                 <td className="px-4 py-2">
                   {[c.city, c.department].filter(Boolean).join(", ") || "—"}
                 </td>
+                <td className="px-4 py-2 text-right">{c.siteCount}</td>
                 <td className="px-4 py-2 text-right">{c.contactCount}</td>
               </tr>
             ))}
@@ -99,7 +111,8 @@ export function CompaniesPage() {
         )}
         {data?.items.length === 0 && (
           <p className="p-6 text-center text-muted-foreground">
-            Todavía no hay empresas. Aparecerán aquí cuando se importe la primera fuente.
+            No hay empresas con estos filtros. Si el catálogo está vacío, usa “Buscar empresas” para
+            traerlas de las fuentes oficiales.
           </p>
         )}
       </Card>

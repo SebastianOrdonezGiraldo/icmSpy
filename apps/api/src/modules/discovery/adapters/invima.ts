@@ -5,6 +5,7 @@ export const invimaAdapter: SourceAdapter = {
   key: "invima",
   name: "INVIMA (datos.gov.co)",
   legalBasis: "open_data",
+  operational: false,
   capabilities: ["discover"],
   // biome-ignore lint/correctness/useYield: se implementa en la fase 1
   async *discover() {

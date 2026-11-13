@@ -1,6 +1,6 @@
 import { createContext } from "./context";
 import { loadEnv } from "./env";
-import { registerDiscoveryJobs } from "./modules/discovery";
+import { registerDiscoveryJobs, syncSources } from "./modules/discovery";
 import { registerEnrichmentJobs } from "./modules/enrichment";
 
 // Proceso aparte de la API: un crawl pesado no ralentiza la interfaz y,
@@ -8,6 +8,8 @@ import { registerEnrichmentJobs } from "./modules/enrichment";
 const ctx = createContext(loadEnv());
 
 await ctx.queue.start();
+// El worker no depende de que la API haya arrancado antes para conocer las fuentes.
+await syncSources(ctx.db);
 await registerDiscoveryJobs(ctx);
 await registerEnrichmentJobs(ctx);
 console.log("icmSpy worker escuchando jobs");

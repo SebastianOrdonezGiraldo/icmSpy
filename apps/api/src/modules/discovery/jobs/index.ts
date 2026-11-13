@@ -1,15 +1,17 @@
 import { QUEUES } from "@icmspy/shared";
 import type { AppContext } from "../../../context";
 import { getAdapter } from "../adapters";
+import { createImportDatasetHandler } from "./import-dataset";
 
-/** Jobs del motor de descubrimiento. La lógica real llega en la fase 1. */
+/** Jobs del motor de descubrimiento. */
 export async function registerDiscoveryJobs(ctx: AppContext) {
-  await ctx.queue.work(QUEUES.importDataset, async ({ adapter, searchRunId }) => {
-    const source = getAdapter(adapter);
-    console.log(`[import.dataset] ${source.key} run=${searchRunId}: pendiente de implementar`);
-  });
+  await ctx.queue.work(
+    QUEUES.importDataset,
+    createImportDatasetHandler({ db: ctx.db, pool: ctx.pool, getAdapter }),
+  );
 
   await ctx.queue.work(QUEUES.importCsv, async ({ searchRunId }) => {
-    console.log(`[import.csv] run=${searchRunId}: pendiente de implementar`);
+    // Falla a propósito: un job sin implementar no debe quedar como completado.
+    throw new Error(`[import.csv] run=${searchRunId}: la importación de CSV no está implementada`);
   });
 }

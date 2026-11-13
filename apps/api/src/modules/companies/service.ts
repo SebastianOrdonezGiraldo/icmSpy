@@ -1,5 +1,7 @@
 import {
   companies,
+  companySites,
+  contactPointSites,
   contactPoints,
   type Db,
   dataProvenance,
@@ -55,7 +57,10 @@ export async function listCompanies(db: Db, q: CompanyListQuery): Promise<Compan
         city: companies.city,
         department: companies.department,
         companyType: companies.companyType,
-        contactCount: sql<number>`(select count(*)::int from ${contactPoints} where ${contactPoints.companyId} = ${companies.id})`,
+        // Columnas calificadas a mano: Drizzle las renderiza sin tabla dentro de `sql`, y en la
+        // subconsulta "id" se resolvería contra contact_points/company_sites (conteo siempre 0).
+        contactCount: sql<number>`(select count(*)::int from contact_points cp where cp.company_id = "companies"."id")`,
+        siteCount: sql<number>`(select count(*)::int from company_sites cs where cs.company_id = "companies"."id")`,
       })
       .from(companies)
       .where(where)
@@ -71,16 +76,37 @@ export async function getCompany(db: Db, id: string): Promise<CompanyDetail | nu
   const [company] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
   if (!company) return null;
 
-  const points = await db
-    .select()
-    .from(contactPoints)
-    .where(eq(contactPoints.companyId, id))
-    .orderBy(asc(contactPoints.kind), asc(contactPoints.value));
+  const [points, sites] = await Promise.all([
+    db
+      .select()
+      .from(contactPoints)
+      .where(eq(contactPoints.companyId, id))
+      .orderBy(asc(contactPoints.kind), asc(contactPoints.value)),
+    db
+      .select({
+        id: companySites.id,
+        sourceKey: sources.key,
+        externalId: companySites.externalId,
+        name: companySites.name,
+        address: companySites.address,
+        cityCode: companySites.cityCode,
+        city: companySites.city,
+        department: companySites.department,
+        sourceCutoffAt: companySites.sourceCutoffAt,
+        sourceUrl: companySites.sourceUrl,
+      })
+      .from(companySites)
+      .innerJoin(sources, eq(sources.id, companySites.sourceId))
+      .where(eq(companySites.companyId, id))
+      .orderBy(asc(companySites.city), asc(companySites.name), asc(companySites.externalId)),
+  ]);
+  const pointIds = points.map((p) => p.id);
 
-  const provenance = points.length
+  const provenance = pointIds.length
     ? await db
         .select({
           entityId: dataProvenance.entityId,
+          field: dataProvenance.field,
           url: dataProvenance.url,
           observedAt: dataProvenance.observedAt,
           sourceKey: sources.key,
@@ -91,18 +117,37 @@ export async function getCompany(db: Db, id: string): Promise<CompanyDetail | nu
         .where(
           and(
             eq(dataProvenance.entityType, "contact_point"),
-            inArray(
-              dataProvenance.entityId,
-              points.map((p) => p.id),
-            ),
+            inArray(dataProvenance.entityId, pointIds),
           ),
         )
+        .orderBy(asc(dataProvenance.observedAt))
     : [];
+  const siteLinks = pointIds.length
+    ? await db
+        .select()
+        .from(contactPointSites)
+        .where(inArray(contactPointSites.contactPointId, pointIds))
+    : [];
+  const sitesByPoint = new Map<string, string[]>();
+  for (const link of siteLinks) {
+    sitesByPoint.set(link.contactPointId, [
+      ...(sitesByPoint.get(link.contactPointId) ?? []),
+      link.siteId,
+    ]);
+  }
 
   const byPoint = new Map<string, ContactPointDetail["sources"]>();
   for (const p of provenance) {
     const list = byPoint.get(p.entityId) ?? [];
-    list.push({ sourceKey: p.sourceKey, url: p.url, observedAt: p.observedAt.toISOString() });
+    // Una entrada por fuente, campo y URL: la repetición de búsquedas no la multiplica.
+    if (!list.some((s) => s.sourceKey === p.sourceKey && s.field === p.field && s.url === p.url)) {
+      list.push({
+        sourceKey: p.sourceKey,
+        field: p.field,
+        url: p.url,
+        observedAt: p.observedAt.toISOString(),
+      });
+    }
     byPoint.set(p.entityId, list);
   }
 
@@ -118,13 +163,19 @@ export async function getCompany(db: Db, id: string): Promise<CompanyDetail | nu
     companyType: company.companyType,
     ciiuCodes: company.ciiuCodes,
     createdAt: company.createdAt.toISOString(),
+    sites: sites.map((s) => ({
+      ...s,
+      sourceCutoffAt: s.sourceCutoffAt?.toISOString() ?? null,
+    })),
     contactPoints: points.map((p) => ({
       id: p.id,
       kind: p.kind,
       value: p.value,
+      valueNormalized: p.valueNormalized,
       isRoleAddress: p.isRoleAddress,
       validationStatus: p.validationStatus,
       isPrimary: p.isPrimary,
+      siteIds: sitesByPoint.get(p.id) ?? [],
       sources: byPoint.get(p.id) ?? [],
     })),
   };

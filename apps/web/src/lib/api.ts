@@ -14,7 +14,22 @@ export async function apiGet<T>(path: string, params?: Record<string, unknown>):
     if (value !== undefined && value !== "" && value !== false) search.set(key, String(value));
   }
   const qs = search.size ? `?${search}` : "";
-  const res = await fetch(`/api${path}${qs}`, { credentials: "include" });
+  return parse<T>(await fetch(`/api${path}${qs}`, { credentials: "include" }));
+}
+
+/** POST con cuerpo JSON a la API de icmSpy. */
+export async function apiPost<T>(path: string, body: unknown): Promise<T> {
+  return parse<T>(
+    await fetch(`/api${path}`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+async function parse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string } | null;
     throw new ApiError(res.status, body?.error ?? "Error de red");

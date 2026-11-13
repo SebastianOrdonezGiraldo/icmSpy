@@ -48,9 +48,13 @@ export function requireAuth(auth: Auth): MiddlewareHandler<{ Variables: AuthVari
   };
 }
 
-export function requireRole(role: UserRole): MiddlewareHandler<{ Variables: AuthVariables }> {
+/** Exige que el usuario tenga uno de los roles indicados. Va después de `requireAuth`. */
+export function requireRole(
+  ...roles: readonly UserRole[]
+): MiddlewareHandler<{ Variables: AuthVariables }> {
   return async (c, next) => {
-    if (c.get("user").role !== role) return c.json({ error: "Sin permiso" }, 403);
+    const role = c.get("user").role as UserRole;
+    if (!roles.includes(role)) return c.json({ error: "Sin permiso" }, 403);
     await next();
   };
 }

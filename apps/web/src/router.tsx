@@ -34,6 +34,11 @@ const companiesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: "/",
   component: CompaniesPage,
+  // Ejecución de búsqueda que se muestra: sobrevive a la recarga y separa resultados entre búsquedas.
+  validateSearch: (search: Record<string, unknown>): { run?: string } =>
+    typeof search.run === "string" && /^[0-9a-f-]{36}$/i.test(search.run)
+      ? { run: search.run }
+      : {},
 });
 
 const companyRoute = createRoute({

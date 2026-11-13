@@ -1,6 +1,8 @@
 import { LEGAL_BASES } from "@icmspy/shared";
+import { sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -39,15 +41,30 @@ export const searchRuns = pgTable(
     adapter: text("adapter").notNull(),
     query: jsonb("query").notNull().default({}),
     status: searchRunStatus("status").notNull().default("queued"),
+    /** Registros leídos de la fuente (en REPS, sedes). */
     foundCount: integer("found_count").notNull().default(0),
+    /** Empresas nuevas creadas por la ejecución. */
     newCount: integer("new_count").notNull().default(0),
+    /** Contadores detallados y metadatos de la fuente (ver SearchRunStats). */
+    stats: jsonb("stats").notNull().default({}),
+    /** Id del job de pg-boss que ejecuta esta búsqueda. */
+    jobId: text("job_id"),
     costUsd: numeric("cost_usd", { precision: 10, scale: 4 }).notNull().default("0"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     finishedAt: timestamp("finished_at", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("search_runs_status_idx").on(t.status)],
+  (t) => [
+    index("search_runs_status_idx").on(t.status),
+    index("search_runs_adapter_created_idx").on(t.adapter, t.createdAt),
+    // Como mucho una ejecución pendiente o en curso por fuente y consulta: lo
+    // garantiza la base de datos, no un chequeo previo que pueda competir.
+    uniqueIndex("search_runs_active_uq")
+      .on(t.adapter, sql`md5(${t.query}::text)`)
+      .where(sql`${t.status} in ('queued', 'running')`),
+  ],
 );
 
 /** Respuesta cruda de cada fuente. Inmutable: nunca se edita, solo se agrega. */
@@ -76,16 +93,38 @@ export const dataProvenance = pgTable(
   "data_provenance",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    entityType: text("entity_type", { enum: ["company", "contact_point", "person"] }).notNull(),
+    entityType: text("entity_type", {
+      enum: ["company", "company_site", "contact_point", "person"],
+    }).notNull(),
     entityId: uuid("entity_id").notNull(),
     field: text("field").notNull(),
+    /**
+     * Ámbito con el que la fuente publicó un contacto en este registro:
+     * "company" (de la empresa o prestador) o "site" (de una sede). Un mismo
+     * contacto puede tener observaciones de ambos ámbitos. null en entidades
+     * que no son contactos.
+     */
+    scope: text("scope", { enum: ["company", "site"] }),
     sourceRecordId: uuid("source_record_id")
       .notNull()
       .references(() => sourceRecords.id, { onDelete: "cascade" }),
     url: text("url"),
     observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("data_provenance_entity_idx").on(t.entityType, t.entityId)],
+  (t) => [
+    index("data_provenance_entity_idx").on(t.entityType, t.entityId),
+    check(
+      "data_provenance_scope_check",
+      sql`${t.scope} is null or ${t.scope} in ('company', 'site')`,
+    ),
+    // Repetir una importación no duplica la procedencia.
+    uniqueIndex("data_provenance_entity_field_record_uq").on(
+      t.entityType,
+      t.entityId,
+      t.field,
+      t.sourceRecordId,
+    ),
+  ],
 );
 
 /** Bitácora del crawler: evita repetir páginas y permite auditar. */
