@@ -3,3 +3,4 @@ export * from "./geo";
 export * from "./queues";
 export * from "./roles";
 export * from "./search-runs";
+export * from "./services/concepts";

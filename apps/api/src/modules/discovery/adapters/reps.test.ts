@@ -34,6 +34,10 @@ describe("mapeo de REPS", () => {
     const r = resolveRepsRow(parseRepsRow(repsRow(), "#1"));
     expect(r.company).toEqual({
       nit: "900000001",
+      identificationType: "NI",
+      identificationNumber: "900000001",
+      providerClass: "Instituciones Prestadoras de Servicios de Salud - IPS",
+      personKind: null,
       providerCode: "6300100001",
       legalName: "CLINICA EJEMPLO DEL QUINDIO S.A.S.",
       companyType: "ips",

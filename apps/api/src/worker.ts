@@ -2,6 +2,7 @@ import { createContext } from "./context";
 import { loadEnv } from "./env";
 import { registerDiscoveryJobs, syncSources } from "./modules/discovery";
 import { registerEnrichmentJobs } from "./modules/enrichment";
+import { registerInstagramJobs } from "./modules/instagram/jobs";
 
 // Proceso aparte de la API: un crawl pesado no ralentiza la interfaz y,
 // si el worker se cae, la web sigue funcionando.
@@ -12,6 +13,7 @@ await ctx.queue.start();
 await syncSources(ctx.db);
 await registerDiscoveryJobs(ctx);
 await registerEnrichmentJobs(ctx);
+await registerInstagramJobs(ctx);
 console.log("icmSpy worker escuchando jobs");
 
 async function shutdown() {

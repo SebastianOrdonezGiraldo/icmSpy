@@ -20,7 +20,18 @@ export const companies = pgTable(
   "companies",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** Solo cuando la fuente declara que la identificación es un NIT. */
     nit: text("nit"),
+    /**
+     * Identificación tal como la publica la fuente (REPS: NI, CC, CE, PT…) y su
+     * número. Una cédula se guarda aquí, nunca en `nit`.
+     */
+    identificationType: text("identification_type"),
+    identificationNumber: text("identification_number"),
+    /** Clase de prestador publicada por la fuente (REPS: IPS, Profesional Independiente…). */
+    providerClass: text("provider_class"),
+    /** Persona natural o jurídica, solo si la fuente lo declara. */
+    personKind: text("person_kind", { enum: ["natural", "juridica"] }),
     legalName: text("legal_name").notNull(),
     tradeName: text("trade_name"),
     domain: text("domain"),
@@ -36,6 +47,10 @@ export const companies = pgTable(
   },
   (t) => [
     uniqueIndex("companies_nit_uq").on(t.nit).where(sql`${t.nit} is not null`),
+    // Identidad de quien no tiene NIT (p. ej. un profesional con cédula): un registro por persona.
+    uniqueIndex("companies_identification_uq")
+      .on(t.identificationType, t.identificationNumber)
+      .where(sql`${t.identificationType} is not null and ${t.identificationNumber} is not null`),
     uniqueIndex("companies_domain_uq").on(t.domain).where(sql`${t.domain} is not null`),
     index("companies_legal_name_trgm").using("gin", sql`${t.legalName} gin_trgm_ops`),
     index("companies_trade_name_trgm").using("gin", sql`${t.tradeName} gin_trgm_ops`),

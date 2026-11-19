@@ -7,11 +7,14 @@ Alcance actual: **extraer, validar y mostrar**. Sin CRM, campañas ni mensajerí
 
 ## Estado
 
-Ya funciona: login, **buscador de empresas** (palabra clave + departamento + municipio, con
-consulta automática de fuentes oficiales), catálogo de empresas con filtros, ficha de empresa con
-sus sedes y la fuente de cada dato, colas y worker. La única fuente operativa es **REPS**
-(Ministerio de Salud, datos.gov.co). INVIMA, CSV y sitio web siguen sin implementar; INVIMA se
-evaluó y no es apta todavía ([`docs/fuentes/invima.md`](docs/fuentes/invima.md)).
+Ya funciona: login, **buscador de prestadores por servicio, actividad y nombre** (palabra clave +
+departamento + municipio, con consulta automática de fuentes oficiales), catálogo de empresas con
+filtros, ficha de empresa con sus sedes y la fuente de cada dato, colas y worker. Fuentes operativas:
+**REPS** nacional (prestadores, sedes y contactos) y las publicaciones abiertas de **servicios
+habilitados por sede** de Cundinamarca (MinSalud, corte 2022) y de la red pública de Boyacá
+([`docs/fuentes/servicios.md`](docs/fuentes/servicios.md)). No hay fuente abierta de servicios para
+los demás departamentos. INVIMA, CSV, sitios web y APIs de búsqueda no se consultan
+([`docs/fuentes/invima.md`](docs/fuentes/invima.md)).
 
 ## Buscador de empresas
 
@@ -21,12 +24,24 @@ operativas, incorpora empresas, sedes y contactos con su procedencia, y muestra 
 de esa búsqueda**, incluidas las empresas que ya estaban en el catálogo. Debajo sigue el catálogo
 completo, que acumula todo lo encontrado por cualquier búsqueda.
 
-**Palabra clave.** Se ignoran mayúsculas y tildes. Varias palabras: deben aparecer **todas**, en
+**Tres vías de descubrimiento**, con la evidencia guardada y mostrada por separado:
+
+1. **Servicio registrado**: la palabra se resuelve contra el catálogo oficial de servicios de REPS
+   (exacta, nombre del servicio o equivalencia documentada, p. ej. "fisioterapeuta" → 739
+   FISIOTERAPIA) y una fuente oficial relaciona una sede del lugar con ese servicio. La entidad
+   aparece aunque su nombre no contenga la palabra.
+2. **Actividad relacionada**: conceptos más amplios documentados ("rehabilitación" → fisioterapia,
+   terapia ocupacional…). Se muestran aparte: no confirman lo buscado.
+3. **Coincidencia por nombre** del prestador o la sede (reglas de abajo).
+
+Se incluyen IPS, **profesionales independientes** (con su cédula, nunca como NIT), entidades con
+objeto social diferente y transporte de pacientes. Detalle: [`docs/fuentes/servicios.md`](docs/fuentes/servicios.md).
+
+**Palabra clave (vía por nombre).** Se ignoran mayúsculas y tildes. Varias palabras: deben aparecer **todas**, en
 cualquier orden, como texto dentro del nombre del prestador o del nombre de la sede (pueden
 repartirse entre ambos). Coincide por contenido (`odonto` encuentra `ODONTOLOGÍA` y
 `ODONTOLÓGICA`). Nada es comodín, SQL ni expresión regular. Entre 2 y 80 caracteres, hasta 6
-palabras de al menos 2 caracteres. Es una búsqueda por nombre publicado: no sabe a qué se dedica
-cada empresa. Implementación única en `packages/shared/src/search-runs.ts` (`keywordTerms`,
+palabras de al menos 2 caracteres. Implementación única en `packages/shared/src/search-runs.ts` (`keywordTerms`,
 `matchesKeyword`), usada por la API, el worker, las pruebas y la interfaz.
 
 **Ubicación.** Departamentos y municipios con códigos DANE del catálogo DIVIPOLA incluido en el
@@ -34,9 +49,10 @@ código ([`docs/fuentes/divipola.md`](docs/fuentes/divipola.md)). La API rechaza
 inexistentes y municipios de otro departamento antes de consultar fuentes. En REPS se filtra por la
 ubicación de la **sede**.
 
-**Fuentes.** Las elige el sistema: solo adaptadores marcados `operational` que saben buscar
-(hoy, REPS: IPS habilitadas). La interfaz muestra la cobertura de cada fuente y su fecha de corte.
-Validación de REPS: [`docs/fuentes/reps.md`](docs/fuentes/reps.md).
+**Fuentes.** Las elige el sistema: solo adaptadores marcados `operational`. Siempre REPS
+(prestadores); además, las fuentes de servicios que cubren el departamento, solo si la palabra
+resolvió algún servicio. La interfaz muestra qué entendió de la palabra, la cobertura y el estado de
+cada fuente y su fecha de corte. Validación: [`docs/fuentes/reps.md`](docs/fuentes/reps.md).
 
 ### Contrato de la API
 
@@ -49,8 +65,10 @@ Todas las rutas exigen sesión; lanzar búsquedas, roles `admin` y `comercial` (
   cliente nunca envía fuentes, URLs ni consultas.
 - `GET /api/search-runs?limit=5` — últimas ejecuciones (también las de la búsqueda fija anterior).
 - `GET /api/search-runs/:id` — estado, criterios (`criteria`), fuentes y contadores (`stats`).
-- `GET /api/search-runs/:id/results?page=1&pageSize=20` — empresas encontradas por esa ejecución,
-  con sus sedes coincidentes y sus contactos (los de la empresa y los de esas sedes).
+- `GET /api/search-runs/:id/results?page=1&pageSize=20&kind=ips|profesional|otro&match=service|related|name`
+  — prestadores encontrados por esa ejecución (primero los que tienen servicio registrado), con
+  tipo, motivos de inclusión, sedes pertinentes con su evidencia (servicio, estado, modalidades,
+  corte, enlace al registro; coincidencia de nombre) y contactos (los de la empresa y los de esas sedes).
 
 ### Cómo funciona
 
@@ -59,13 +77,16 @@ Todas las rutas exigen sesión; lanzar búsquedas, roles `admin` y `comercial` (
    encolar el job ocurre en **una transacción** (Drizzle y pg-boss por el mismo cliente). Dos
    solicitudes equivalentes ("Clínica Dental" y "dental clinica") comparten la ejecución activa:
    lo garantiza el índice único `search_runs_active_uq`.
-2. El worker (`import.dataset`) lee cada fuente completa para el lugar pedido (todas las
-   páginas, verificando columnas, tipos y conteo) y aplica la palabra clave.
+2. El worker (`import.dataset`) lee todas las sedes del lugar en REPS y, si corresponde, la fuente
+   de servicios (todas las páginas, verificando columnas, tipos y conteo). Cruza servicio y sede por
+   código de sede; solo usa sedes que existen hoy en REPS y están en el lugar.
 3. En **una sola transacción** bloquea la ejecución, incorpora lo encontrado (original con hash →
    empresa por NIT → sede → **resultado de la ejecución** → contactos salvo los suprimidos →
    procedencia) y la cierra como `done`. Si falla cualquier paso, incluido el cierre, no queda
-   nada: ni datos ni resultados, y un reintento parte de cero sin inflar contadores. Con varias
-   fuentes la ejecución es atómica: o se confirman todas o ninguna (no hay resultados parciales).
+   nada: ni datos ni resultados, y un reintento parte de cero sin inflar contadores. Si una fuente
+   de servicios falla, se reintenta toda la búsqueda; en el último intento se sigue sin ella y la
+   ejecución queda **parcial** (`stats.partial`), con esa fuente marcada como fallida. Si falla
+   REPS, la búsqueda falla.
    Una ejecución `done` nunca se reabre; un intento reemplazado o anterior al vigente no escribe.
 4. Si el job terminó sin cerrar la ejecución (worker caído), al consultarla se marca fallida.
 
@@ -84,9 +105,14 @@ tener ambos ámbitos: estar vinculado a una sede no le quita el general. La migr
 `0003_provenance_contact_scope` añade la columna y la rellena para la procedencia de REPS con ese
 mismo mapeo; el resto queda en `null` y no se presume general.
 
-**Conteos.** _Registros leídos_ (sedes de REPS en el lugar), _coincidencias_ (con la palabra
-clave), _empresas encontradas_ = _nuevas_ + _ya en el catálogo_, _sedes coincidentes_, _contactos_
-nuevos o ya registrados, _suprimidos_ y _no interpretados_.
+**Evidencia.** `site_services` (servicio de cada sede según cada fuente, sin sustituir una
+observación más reciente por otra anterior) y `search_run_matches` (motivos de inclusión por
+ejecución, de todas las fuentes). Migración `0004_services_and_providers` (aditiva).
+
+**Conteos.** _Sedes leídas en REPS_, _relaciones sede–servicio leídas_, _sedes con el servicio en
+el lugar_ / _fuera de él_ / _que ya no figuran en REPS_, _prestadores encontrados_ = _nuevos_ + _ya en
+el catálogo_ y su reparto por motivo, _sedes pertinentes_, _contactos_ nuevos o ya registrados,
+_suprimidos_ y _no interpretados_.
 
 **Interfaz.** La ejecución mostrada va en la URL (`/?run=<id>`): al recargar se recuperan
 criterios, estado y resultados, y la caché nunca mezcla resultados de búsquedas distintas. Si se
@@ -96,10 +122,11 @@ botón. Sondeo cada 3 s mientras está activa y aviso si sigue en cola más de u
 **Historial.** Las ejecuciones de la búsqueda fija anterior ("IPS y clínicas de Quindío") se
 conservan y se listan; no guardaron lista de resultados (sus empresas están en el catálogo).
 
-Limitaciones: REPS se publica una vez al año (corte vigente: marzo de 2026), solo cubre IPS
-(no distribuidores ni profesionales independientes) y no trae sitio web ni estado de habilitación
-por sede. Los correos quedan como `unknown`: no se verifica entregabilidad. No hay programación
-periódica.
+Limitaciones: no hay relación abierta sede → servicio fuera de Cundinamarca (2022) y la red pública
+de Boyacá; la relación nacional está en el portal REPS, que exige iniciar sesión y no se automatiza.
+REPS se publica una vez al año (corte vigente: marzo de 2026) y no trae sitio web ni distribuidores.
+Las publicaciones no confirman vigencia actual. Los correos quedan como `unknown`. No hay
+programación periódica ni búsqueda en Internet.
 
 ## Stack
 
@@ -158,6 +185,8 @@ Otros comandos: `pnpm lint`, `pnpm typecheck`, `pnpm --filter @icmspy/api test`,
 Tras cambiar el esquema: `pnpm db:generate` y luego `pnpm db:migrate`. La migración
 `0001_reps_sites_and_runs` añade `company_sites`, `contact_point_sites` y columnas de estado en
 `search_runs`; `0002_search_run_results` (aditiva) añade la tabla de resultados por ejecución;
+`0004_services_and_providers` (aditiva, con actualización de datos) añade servicios por sede,
+evidencias por ejecución e identificación tipada de prestadores;
 `0003_provenance_contact_scope` (aditiva, con actualización de datos) guarda el ámbito de cada
 contacto en la procedencia.
 

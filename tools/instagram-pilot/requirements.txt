@@ -1,0 +1,8 @@
+# Dependencias fijadas del piloto (Python 3.12). Todas son bibliotecas locales y gratuitas.
+instaloader==4.16
+phonenumbers==9.0.43
+requests==2.34.2
+urllib3==2.8.0
+idna==3.20
+certifi==2026.10.23
+charset-normalizer==3.5.2

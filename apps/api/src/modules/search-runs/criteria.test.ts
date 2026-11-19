@@ -143,11 +143,14 @@ describe("plan de búsqueda", () => {
     expect(a).toEqual(b);
     expect(JSON.stringify(a.query)).toBe(JSON.stringify(b.query));
     expect(a.query).toEqual({
-      v: 2,
+      v: 3,
       keywords: ["clinica", "odontologica"],
       departmentCodes: ["63"],
       municipalityCodes: ["63001"],
-      providerClass: "ips",
+      providerClasses: ["ips", "profesional", "objeto_social", "transporte"],
+      // "clinica odontologica" no es el nombre de ningún servicio del catálogo.
+      services: [],
+      serviceCodes: [],
       sources: ["reps"],
     });
   });

@@ -9,6 +9,10 @@ export interface SearchQuery {
   municipalityCodes?: string[];
   /** Clase de prestador (REPS). Solo se admiten las clases que el adaptador declara. */
   providerClass?: string;
+  /** Varias clases de prestador (REPS: ips, profesional, objeto_social, transporte). */
+  providerClasses?: string[];
+  /** Códigos de servicio del catálogo oficial (fuentes de servicios). */
+  serviceCodes?: string[];
   cities?: string[];
   /**
    * Palabras de búsqueda ya plegadas (ver `keywordTerms` en @icmspy/shared).
@@ -80,6 +84,13 @@ export interface ResolvedRecord {
      * una empresa sin NIT; nunca se fusiona por nombre.
      */
     providerCode: string;
+    /** Tipo de identificación publicado (NI, CC, CE, PT…) y su número. */
+    identificationType: string | null;
+    identificationNumber: string | null;
+    /** Clase de prestador publicada por la fuente. */
+    providerClass: string | null;
+    /** Persona natural o jurídica, solo si la fuente lo declara. */
+    personKind: "natural" | "juridica" | null;
     legalName: string;
     companyType: CompanyType;
     cityCode: string | null;
@@ -96,6 +107,21 @@ export interface ResolvedRecord {
   } | null;
   contacts: ResolvedContact[];
   /** Fecha de corte declarada por la fuente para este registro. */
+  sourceCutoffAt: Date | null;
+  sourceCutoffRaw: string | null;
+}
+
+/** Relación sede → servicio leída de una fuente de servicios. */
+export interface ResolvedServiceRecord {
+  /** Código de la sede en REPS (código de habilitación + número de sede). */
+  siteCode: string;
+  serviceCode: string;
+  serviceName: string;
+  /** Estado publicado (p. ej. "SI" en habilitado); null si la fuente no lo publica. */
+  status: string | null;
+  modalities: string[];
+  /** Persona natural o jurídica, si la fuente lo declara. */
+  personKind: "natural" | "juridica" | null;
   sourceCutoffAt: Date | null;
   sourceCutoffRaw: string | null;
 }
@@ -121,6 +147,21 @@ export interface SourceAdapter {
    */
   searchCoverage?: string;
   capabilities: readonly ("discover" | "enrich")[];
+  /**
+   * providers: publica prestadores y sedes (identidad y contactos).
+   * services: publica la relación sede → servicio; se cruza con un proveedor
+   * por código de sede y nunca crea empresas por sí sola.
+   */
+  role?: "providers" | "services";
+  /** Departamentos (código DANE) que cubre una fuente de servicios. */
+  serviceCoverage?: { departmentCodes: readonly string[] };
+  /** Interpreta un registro de una fuente de servicios. */
+  resolveService?(record: RawRecord): ResolvedServiceRecord;
+  /**
+   * Municipio (código DANE) de cada sede que existe hoy en la fuente; las que
+   * no aparecen no están en el mapa. Para clasificar evidencias sin sede vigente.
+   */
+  lookupSiteLocations?(siteCodes: string[], signal?: AbortSignal): Promise<Map<string, string>>;
   discover?(query: SearchQuery, hooks?: DiscoverHooks): AsyncIterable<RawRecord>;
   /** Traduce un registro crudo de esta fuente a empresa, sede y contactos. */
   resolve?(record: RawRecord): ResolvedRecord;

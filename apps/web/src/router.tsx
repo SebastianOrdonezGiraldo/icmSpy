@@ -9,6 +9,7 @@ import { AppLayout } from "./features/auth/app-layout";
 import { LoginPage } from "./features/auth/login-page";
 import { CompaniesPage } from "./features/companies/companies-page";
 import { CompanyPage } from "./features/companies/company-page";
+import { InstagramPilotPage } from "./features/instagram-pilot/instagram-pilot-page";
 import { authClient } from "./lib/auth-client";
 
 const rootRoute = createRootRoute({ component: Outlet });
@@ -47,9 +48,24 @@ const companyRoute = createRoute({
   component: CompanyPage,
 });
 
+const instagramRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: "/instagram",
+  component: InstagramPilotPage,
+  validateSearch: (search: Record<string, unknown>): { run?: string; demo?: string } => ({
+    ...(typeof search.run === "string" && /^\d{8}T\d{6}Z-[a-z0-9._]{1,30}$/.test(search.run)
+      ? { run: search.run }
+      : {}),
+    // Búsqueda de la demo con datos de prueba: queda en la URL para verla al recargar.
+    ...(typeof search.demo === "string" && /^[0-9a-f-]{36}$/i.test(search.demo)
+      ? { demo: search.demo }
+      : {}),
+  }),
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([companiesRoute, companyRoute]),
+  appRoute.addChildren([companiesRoute, companyRoute, instagramRoute]),
 ]);
 
 export const router = createRouter({ routeTree });

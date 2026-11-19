@@ -55,7 +55,10 @@ export function searchRunsRoutes(ctx: AppContext) {
       const run = await getSearchRun(ctx, id.data);
       if (!run) return c.json({ error: "No encontrada" }, 404);
       return c.json(
-        await getSearchRunResults(ctx.db, run.id, query.data.page, query.data.pageSize),
+        await getSearchRunResults(ctx.db, run.id, query.data.page, query.data.pageSize, {
+          kind: query.data.kind,
+          match: query.data.match,
+        }),
       );
     });
 }

@@ -15,9 +15,18 @@ export function AppLayout() {
     <div className="min-h-screen">
       <header className="border-b">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <Link to="/" className="font-semibold">
-            icmSpy
-          </Link>
+          <nav className="flex items-center gap-4">
+            <Link to="/" className="font-semibold">
+              icmSpy
+            </Link>
+            <Link
+              to="/instagram"
+              className="text-sm text-muted-foreground hover:text-foreground"
+              activeProps={{ className: "text-foreground font-medium" }}
+            >
+              Piloto Instagram
+            </Link>
+          </nav>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-muted-foreground">{session?.user.name}</span>
             <Button variant="outline" size="sm" onClick={signOut}>

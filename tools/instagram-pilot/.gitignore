@@ -1,0 +1,12 @@
+# Entorno local y artefactos: los datos reales y las sesiones viven fuera del repositorio.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+out/
+runs/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.jsonl
+session-*

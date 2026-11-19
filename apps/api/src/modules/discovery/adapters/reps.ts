@@ -1,4 +1,4 @@
-import { matchesKeyword } from "@icmspy/shared";
+import { type CompanyType, matchesKeyword } from "@icmspy/shared";
 import { z } from "zod";
 import { normalizeNit, parseEmails, parsePhonesCO } from "../../enrichment/normalize";
 import { landlineAreaForMunicipality } from "../../enrichment/phone-areas";
@@ -34,8 +34,22 @@ const LICENSE_URL = "https://creativecommons.org/licenses/by-sa/4.0/legalcode";
 /** Clases de prestador admitidas, con el valor exacto de `claseprestador` en la fuente. */
 export const REPS_PROVIDER_CLASSES = {
   ips: "Instituciones Prestadoras de Servicios de Salud - IPS",
+  profesional: "Profesional Independiente",
+  objeto_social: "Objeto Social Diferente a la Prestación de Servicios de Salud",
+  transporte: "Transporte Especial de Pacientes",
 } as const;
-type ProviderClassKey = keyof typeof REPS_PROVIDER_CLASSES;
+export type ProviderClassKey = keyof typeof REPS_PROVIDER_CLASSES;
+
+/**
+ * Tipo de actividad según la clase publicada. Un profesional independiente no
+ * es una IPS; "objeto social diferente" y transporte quedan como "otro".
+ */
+const COMPANY_TYPE_BY_CLASS: Record<string, CompanyType> = {
+  [REPS_PROVIDER_CLASSES.ips]: "ips",
+  [REPS_PROVIDER_CLASSES.profesional]: "profesional_independiente",
+  [REPS_PROVIDER_CLASSES.objeto_social]: "otro",
+  [REPS_PROVIDER_CLASSES.transporte]: "otro",
+};
 
 /** Columnas que se piden y el tipo que el portal declara para cada una. */
 const COLUMNS = {
@@ -152,9 +166,15 @@ export function buildRepsWhere(query: SearchQuery) {
   if (keywords.some((k) => typeof k !== "string" || k.trim() === "" || k.length > 80)) {
     throw new SourceQueryError("Palabra clave no válida");
   }
-  const classKey = query.providerClass as ProviderClassKey | undefined;
-  const providerClass = classKey && REPS_PROVIDER_CLASSES[classKey];
-  if (!providerClass) throw new SourceQueryError("Clase de prestador no admitida para REPS");
+  const classKeys = query.providerClasses ?? (query.providerClass ? [query.providerClass] : []);
+  const providerClasses = classKeys.map((k) => REPS_PROVIDER_CLASSES[k as ProviderClassKey]);
+  if (providerClasses.length === 0 || providerClasses.some((c) => !c)) {
+    throw new SourceQueryError("Clase de prestador no admitida para REPS");
+  }
+  const classFilter =
+    providerClasses.length === 1
+      ? `claseprestador = ${soqlString(providerClasses[0] as string)}`
+      : `claseprestador in (${providerClasses.map((c) => soqlString(c as string)).join(", ")})`;
   // Filtro geográfico por la ubicación de la SEDE, no la del prestador: una
   // empresa domiciliada en otro lugar aparece si tiene una sede aquí.
   const geo = municipalities.length
@@ -162,11 +182,11 @@ export function buildRepsWhere(query: SearchQuery) {
     : codes.map((c) => `starts_with(municipiosede, ${soqlString(c)})`).join(" OR ");
   return {
     // La palabra clave no va a SoQL: no ignora tildes. Se aplica al leer cada fila.
-    where: `(${geo}) AND claseprestador = ${soqlString(providerClass)}`,
+    where: `(${geo}) AND ${classFilter}`,
     codes,
     municipalities,
     keywords,
-    providerClass,
+    providerClasses: providerClasses as string[],
   };
 }
 
@@ -197,13 +217,20 @@ export function resolveRepsRow(row: RepsRow): ResolvedRecord {
   const siteArea = landlineAreaForMunicipality(row.municipiosede);
   const providerArea = landlineAreaForMunicipality(row.municipio_prestador);
   const cutoffRaw = clean(row.fecha_corte_reps);
+  const idType = row.tipoid.trim().toUpperCase();
   return {
     company: {
       // Solo es NIT si la fuente lo dice; una cédula nunca se trata como NIT.
-      nit: row.tipoid.trim().toUpperCase() === "NI" ? normalizeNit(row.numeroidentificacion) : null,
+      nit: idType === "NI" ? normalizeNit(row.numeroidentificacion) : null,
+      // La identificación se conserva con su tipo (CC, CE, PT…): identidad estable de una persona.
+      identificationType: idType || null,
+      identificationNumber: row.numeroidentificacion.replace(/\D/g, "") || null,
+      providerClass: clean(row.claseprestador),
+      // REPS no declara si es persona natural o jurídica: no se deduce.
+      personKind: null,
       providerCode: row.codigoprestador,
       legalName: clean(row.nombreprestador) ?? row.nombreprestador,
-      companyType: "ips",
+      companyType: COMPANY_TYPE_BY_CLASS[row.claseprestador] ?? "otro",
       cityCode: row.municipio_prestador,
       city: clean(row.municipioprestadordesc),
       department: clean(row.departamentoprestadordesc),
@@ -294,7 +321,7 @@ export function createRepsAdapter(options: RepsAdapterOptions = {}): SourceAdapt
   }
 
   async function* discover(query: SearchQuery, hooks: DiscoverHooks = {}) {
-    const { where, codes, municipalities, keywords, providerClass } = buildRepsWhere(query);
+    const { where, codes, municipalities, keywords, providerClasses } = buildRepsWhere(query);
     const updatedAt = await checkColumns(hooks.signal);
 
     const countUrl = `${REPS_RESOURCE_URL}?${new URLSearchParams({
@@ -353,7 +380,7 @@ export function createRepsAdapter(options: RepsAdapterOptions = {}): SourceAdapt
           hooks.onExcluded?.(record, "municipio");
           continue;
         }
-        if (row.claseprestador !== providerClass) {
+        if (!providerClasses.includes(row.claseprestador)) {
           hooks.onExcluded?.(record, "clase de prestador");
           continue;
         }
@@ -375,16 +402,40 @@ export function createRepsAdapter(options: RepsAdapterOptions = {}): SourceAdapt
     }
   }
 
+  /** Municipio de cada sede que existe hoy en REPS, consultando por código (lotes de 100). */
+  async function lookupSiteLocations(siteCodes: string[], signal?: AbortSignal) {
+    const found = new Map<string, string>();
+    const unique = [...new Set(siteCodes)].filter((c) => /^\d+$/.test(c));
+    for (let i = 0; i < unique.length; i += 100) {
+      const chunk = unique.slice(i, i + 100);
+      const url = `${REPS_RESOURCE_URL}?${new URLSearchParams({
+        $select: "codigohabilitacionsede,municipiosede",
+        $where: `codigohabilitacionsede in (${chunk.map(soqlString).join(", ")})`,
+        $limit: String(chunk.length + 1),
+      })}`;
+      const rows = await getJson(url, signal);
+      if (!Array.isArray(rows)) throw new SourceSchemaError("la consulta de sedes no es una lista");
+      for (const r of rows as { codigohabilitacionsede?: unknown; municipiosede?: unknown }[]) {
+        if (typeof r.codigohabilitacionsede === "string" && typeof r.municipiosede === "string") {
+          found.set(r.codigohabilitacionsede, r.municipiosede);
+        }
+      }
+    }
+    return found;
+  }
+
   return {
     key: "reps",
     name: "REPS (datos.gov.co)",
     legalBasis: "open_data",
     licenseUrl: LICENSE_URL,
     operational: true,
+    role: "providers",
     searchCoverage:
-      "Instituciones prestadoras de servicios de salud (IPS) habilitadas en REPS, por la ubicación de sus sedes. No incluye profesionales independientes, distribuidores ni otras empresas.",
+      "Prestadores registrados en REPS (IPS, profesionales independientes, entidades con objeto social diferente y transporte de pacientes) por la ubicación de sus sedes. Publica nombres y contactos, no los servicios de cada sede.",
     capabilities: ["discover"],
     discover,
+    lookupSiteLocations,
     resolve(record) {
       return resolveRepsRow(parseRepsRow(record.payload, record.externalId));
     },
