@@ -7,6 +7,8 @@ import type { AppContext } from "./context";
 import { type AuthVariables, requireAuth } from "./modules/auth";
 import { companiesRoutes } from "./modules/companies";
 import { adapters } from "./modules/discovery";
+import { instagramDemoRoutes } from "./modules/instagram/routes";
+import { instagramPilotRoutes } from "./modules/instagram-pilot";
 import { searchRunsRoutes } from "./modules/search-runs";
 
 export function createApp(ctx: AppContext) {
@@ -42,7 +44,9 @@ export function createApp(ctx: AppContext) {
       ),
     )
     .route("/companies", companiesRoutes(ctx))
-    .route("/search-runs", searchRunsRoutes(ctx));
+    .route("/search-runs", searchRunsRoutes(ctx))
+    .route("/instagram-pilot", instagramPilotRoutes(ctx))
+    .route("/instagram-demo", instagramDemoRoutes(ctx));
 
   app.route("/api", api);
   app.all("/api/*", (c) => c.json({ error: "No encontrado" }, 404));

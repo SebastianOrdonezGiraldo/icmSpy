@@ -11,6 +11,16 @@ const envSchema = z.object({
   /** Carpeta con el frontend compilado. Vacío en desarrollo (lo sirve Vite). */
   WEB_DIST_DIR: z.string().optional(),
   MIGRATIONS_DIR: z.string().optional(),
+  /**
+   * Carpeta de ejecuciones del piloto local de Instagram (tools/instagram-pilot), p. ej.
+   * %LOCALAPPDATA%\icmSpy\instagram-pilot\runs. Vacío = visor desactivado. Solo lectura.
+   */
+  INSTAGRAM_PILOT_RUNS_DIR: z.string().optional(),
+  /**
+   * Proveedor de la recolección de Instagram en el worker. `disabled` (por defecto) no registra
+   * la cola; `fake` usa datos sintéticos y solo se admite fuera de producción (modo local).
+   */
+  INSTAGRAM_PROVIDER: z.enum(["disabled", "fake"]).default("disabled"),
 });
 
 export type Env = z.infer<typeof envSchema>;

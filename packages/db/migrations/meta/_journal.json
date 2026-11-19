@@ -36,6 +36,13 @@
       "when": 1794607909036,
       "tag": "0004_services_and_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1795034921098,
+      "tag": "0005_instagram_collection",
+      "breakpoints": true
     }
   ]
 }
