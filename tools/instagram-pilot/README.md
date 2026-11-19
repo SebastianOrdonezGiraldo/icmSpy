@@ -18,14 +18,14 @@ en las bases de icmSpy** (ni en `companies`, `people`, `contact_points` ni en ta
 
 ## Qué hace y qué no
 
-| Hace | No hace |
-| --- | --- |
-| Lee la lista de seguidores con Instaloader (`get_followers`, misma consulta) | Descargar publicaciones, fotos, videos, historias u otras listas |
-| Consulta el perfil de cada seguidor **público** (una consulta por perfil) | Consultar perfiles privados (quedan como fila mínima "omitido") |
+| Hace                                                                                                        | No hace                                                                                                           |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Lee la lista de seguidores con Instaloader (`get_followers`, misma consulta)                                | Descargar publicaciones, fotos, videos, historias u otras listas                                                  |
+| Consulta el perfil de cada seguidor **público** (una consulta por perfil)                                   | Consultar perfiles privados (quedan como fila mínima "omitido")                                                   |
 | Extrae correos, teléfonos, `mailto:`, `tel:` y enlaces de WhatsApp de la biografía y los enlaces del perfil | Leer "botones de contacto": Instaloader 4.16 no los expone; solo se registra el **nombre** de la clave si aparece |
-| Opcional (`--web`): portada + 1 página de contacto de hasta 20 sitios propios | Visitar plataformas de enlaces, redes sociales, acortadores o directorios |
-| Guarda todo en SQLite tras cada unidad y permite reanudar | Rotar cuentas, usar proxies, resolver CAPTCHA o eludir límites |
-| Se detiene ante 429, checkpoint, sesión inválida, 403, cambio de formato o plazo | Reintentar en bucle |
+| Opcional (`--web`): portada + 1 página de contacto de hasta 20 sitios propios                               | Visitar plataformas de enlaces, redes sociales, acortadores o directorios                                         |
+| Guarda todo en SQLite tras cada unidad y permite reanudar                                                   | Rotar cuentas, usar proxies, resolver CAPTCHA o eludir límites                                                    |
+| Se detiene ante 429, checkpoint, sesión inválida, 403, cambio de formato o plazo                            | Reintentar en bucle                                                                                               |
 
 Reglas de contactos: nada se infiere. No se generan correos a partir de nombres o dominios, no se
 asigna +57 por defecto, solo se da formato E.164 cuando el número trae prefijo `+` o viene de un enlace
@@ -87,15 +87,15 @@ Todos los comandos se ejecutan desde `tools\instagram-pilot`. Solo puede haber u
 .venv\Scripts\python.exe -m icm_ig_pilot run --target https://www.instagram.com/PERFIL/ --user SU_CUENTA --limit 100
 ```
 
-| Parámetro | Por defecto | Notas |
-| --- | --- | --- |
-| `--target` | (obligatorio) | URL del perfil o nombre de usuario. Se rechazan publicaciones, reels, historias, dominios parecidos y URL con credenciales |
-| `--user` | (obligatorio) | Debe coincidir con la cuenta de la sesión; se verifica antes de leer nada |
-| `--limit` | 100 | Máximo 300, acumulado con las reanudaciones |
-| `--max-minutes` | 20 | Plazo de la ejecución; al agotarse se guarda y se detiene |
-| `--web` | desactivado | Consulta hasta 20 sitios web enlazados |
-| `--session-file` | ver arriba | |
-| `--output` | `%LOCALAPPDATA%\icmSpy\instagram-pilot\runs` | Fuera del repositorio |
+| Parámetro        | Por defecto                                  | Notas                                                                                                                      |
+| ---------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `--target`       | (obligatorio)                                | URL del perfil o nombre de usuario. Se rechazan publicaciones, reels, historias, dominios parecidos y URL con credenciales |
+| `--user`         | (obligatorio)                                | Debe coincidir con la cuenta de la sesión; se verifica antes de leer nada                                                  |
+| `--limit`        | 100                                          | Máximo 300, acumulado con las reanudaciones                                                                                |
+| `--max-minutes`  | 20                                           | Plazo de la ejecución; al agotarse se guarda y se detiene                                                                  |
+| `--web`          | desactivado                                  | Consulta hasta 20 sitios web enlazados                                                                                     |
+| `--session-file` | ver arriba                                   |                                                                                                                            |
+| `--output`       | `%LOCALAPPDATA%\icmSpy\instagram-pilot\runs` | Fuera del repositorio                                                                                                      |
 
 Ctrl+C detiene de forma ordenada tras la unidad en curso (una segunda pulsación corta de inmediato;
 lo ya confirmado queda guardado).
@@ -119,14 +119,14 @@ Instaloader (sin repetir la primera página) y descarta repetidos por ID. Si el 
 
 ## Salidas (en la carpeta de la ejecución, fuera de Git)
 
-| Archivo | Contenido |
-| --- | --- |
-| `pilot.sqlite` | Fuente de verdad: ejecución, cursor, seguidores, historial de nombres, contactos con procedencia, sitios web, eventos |
-| `followers.jsonl` | Un seguidor por línea; `contacts_status`: `found`, `none_found`, `not_consulted`, `private_skipped`, `inaccessible`, `failed` |
-| `contacts.csv` | Una observación por fila: perfil, tipo, original, normalizado, E.164, estado, extensión, método, fuente, campo, URL, fecha, evidencia, atribución, perfiles que comparten el valor. UTF-8 con BOM, todo entre comillas, sin fórmulas; los teléfonos llevan `'` inicial para que Excel los trate como texto |
-| `summary.json` | Contadores, motivo de detención, estadísticas, versiones, "dependencias de pago: ninguna" |
-| `report.md` | Resumen legible: solo cantidades |
-| `run.log` | Eventos saneados (sin cookies, tokens, correos, teléfonos ni biografías) |
+| Archivo           | Contenido                                                                                                                                                                                                                                                                                                  |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pilot.sqlite`    | Fuente de verdad: ejecución, cursor, seguidores, historial de nombres, contactos con procedencia, sitios web, eventos                                                                                                                                                                                      |
+| `followers.jsonl` | Un seguidor por línea; `contacts_status`: `found`, `none_found`, `not_consulted`, `private_skipped`, `inaccessible`, `failed`                                                                                                                                                                              |
+| `contacts.csv`    | Una observación por fila: perfil, tipo, original, normalizado, E.164, estado, extensión, método, fuente, campo, URL, fecha, evidencia, atribución, perfiles que comparten el valor. UTF-8 con BOM, todo entre comillas, sin fórmulas; los teléfonos llevan `'` inicial para que Excel los trate como texto |
+| `summary.json`    | Contadores, motivo de detención, estadísticas, versiones, "dependencias de pago: ninguna"                                                                                                                                                                                                                  |
+| `report.md`       | Resumen legible: solo cantidades                                                                                                                                                                                                                                                                           |
+| `run.log`         | Eventos saneados (sin cookies, tokens, correos, teléfonos ni biografías)                                                                                                                                                                                                                                   |
 
 Atribución de contactos: `profile_owner` (publicado en el propio perfil), `website_same_domain` (correo
 del mismo dominio que el sitio), `website_unverified` (en el sitio, sin confirmar que sea del titular) y

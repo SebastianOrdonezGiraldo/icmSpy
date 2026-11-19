@@ -51,12 +51,12 @@ Meta ha documentado acciones contra la extracción automatizada de perfiles púb
 
 Las siguientes son capacidades declaradas por sus desarrolladores. La recomendación de integración queda condicionada al piloto; no son resultados medidos en cuentas colombianas.
 
-| Opción | Lista de seguidores | Contactos y enriquecimiento | Decisión propuesta |
-| --- | --- | --- | --- |
-| Apify, actor mantenido por Apify para seguidores | Acepta usuario o URL; devuelve ID, usuario, nombre y banderas de privacidad y verificación | El listado no contiene la biografía ni todos los detalles de cada seguidor | Candidato principal para enumerar |
-| Apify, actor mantenido por Apify para perfiles | Recibe perfiles conocidos; no sustituye la enumeración | Biografía, enlaces y datos del perfil; contactos si están en la biografía | Candidato inicial para enriquecer; medir cuánto pierde frente a campos de contacto empresarial |
-| Data Slayer en Apify, mantenido por la comunidad | Lista con modos de salida | Documenta correo empresarial, correo en biografía, teléfono de contacto, web y estado de enriquecimiento | Comparar como alternativa que reúne las dos etapas |
-| Public Signal Labs en Apify, mantenido por la comunidad | Documenta paginación y continuación cuando la fuente la permite | Devuelve la lista; requiere enriquecimiento aparte | Comparar recuperación y continuación; no elegir solo por precio |
+| Opción                                                  | Lista de seguidores                                                                        | Contactos y enriquecimiento                                                                              | Decisión propuesta                                                                             |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Apify, actor mantenido por Apify para seguidores        | Acepta usuario o URL; devuelve ID, usuario, nombre y banderas de privacidad y verificación | El listado no contiene la biografía ni todos los detalles de cada seguidor                               | Candidato principal para enumerar                                                              |
+| Apify, actor mantenido por Apify para perfiles          | Recibe perfiles conocidos; no sustituye la enumeración                                     | Biografía, enlaces y datos del perfil; contactos si están en la biografía                                | Candidato inicial para enriquecer; medir cuánto pierde frente a campos de contacto empresarial |
+| Data Slayer en Apify, mantenido por la comunidad        | Lista con modos de salida                                                                  | Documenta correo empresarial, correo en biografía, teléfono de contacto, web y estado de enriquecimiento | Comparar como alternativa que reúne las dos etapas                                             |
+| Public Signal Labs en Apify, mantenido por la comunidad | Documenta paginación y continuación cuando la fuente la permite                            | Devuelve la lista; requiere enriquecimiento aparte                                                       | Comparar recuperación y continuación; no elegir solo por precio                                |
 
 Fuentes de las capacidades: [listado de Apify](https://apify.com/apify/instagram-followers-following-scraper), [perfiles de Apify](https://apify.com/apify/instagram-profile-scraper), [Data Slayer](https://apify.com/data-slayer/instagram-followers-scraper---no-login), [Public Signal Labs](https://apify.com/publicsignallabs/instagram-followers).
 
@@ -70,12 +70,12 @@ Mailerfind ofrece además un conector MCP que permite iniciar análisis y consul
 
 ## Alternativas de desarrollo
 
-| Camino | Ventaja | Dependencia principal | Elección |
-| --- | --- | --- | --- |
-| Proveedor de extracción con API | Reduce el trabajo inicial de adquisición; permite medir resultados pronto | Calidad, disponibilidad, tarifas y condiciones del proveedor | Empezar aquí, con adaptadores intercambiables |
-| Integrar Mailerfind con la cuenta de ICM | Reutiliza su análisis y organización de prospectos para uso interno | Acceso técnico, condiciones de uso, créditos y capacidad real del conector | Evaluar si prima entregar rápido sobre controlar el motor |
-| Construir un recolector propio | Más control sobre el código de adquisición | Mantenimiento continuo, acceso a la plataforma, restricciones y operación | Posponer hasta justificarlo con volumen y costo medidos |
-| API oficial de Meta | Acceso documentado para los casos admitidos | Su alcance no entrega la función solicitada | Usarla solo para capacidades que sí cubra |
+| Camino                                   | Ventaja                                                                   | Dependencia principal                                                      | Elección                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Proveedor de extracción con API          | Reduce el trabajo inicial de adquisición; permite medir resultados pronto | Calidad, disponibilidad, tarifas y condiciones del proveedor               | Empezar aquí, con adaptadores intercambiables             |
+| Integrar Mailerfind con la cuenta de ICM | Reutiliza su análisis y organización de prospectos para uso interno       | Acceso técnico, condiciones de uso, créditos y capacidad real del conector | Evaluar si prima entregar rápido sobre controlar el motor |
+| Construir un recolector propio           | Más control sobre el código de adquisición                                | Mantenimiento continuo, acceso a la plataforma, restricciones y operación  | Posponer hasta justificarlo con volumen y costo medidos   |
+| API oficial de Meta                      | Acceso documentado para los casos admitidos                               | Su alcance no entrega la función solicitada                                | Usarla solo para capacidades que sí cubra                 |
 
 Un recolector propio no es simplemente «abrir Chrome y bajar hasta el final». El listado puede cambiar, truncarse o requerir acceso que no se tiene. El plan inicial no depende de pedir contraseñas o cookies de Instagram a los comerciales ni de eludir restricciones de acceso.
 
@@ -89,17 +89,17 @@ Comparar el mismo tramo solicitado con el listado de Apify y con Data Slayer. Pr
 
 El informe debe contener:
 
-| Medida | Definición |
-| --- | --- |
-| Seguidores declarados | Contador de la cuenta y fecha en que se observó; puede estar ausente |
-| Filas recibidas y usuarios únicos | Duplicados identificados por ID, separados de perfiles sin ID |
-| Cobertura comprobable | Comparación por IDs con una referencia propia del mismo momento cuando exista; en cuentas grandes sin referencia, cobertura desconocida |
-| Perfiles consultados | Exitosos, privados omitidos, inaccesibles y errores, con denominadores claros |
-| Contactos recuperados | Perfiles con correo, con teléfono y con ambos; también valores distintos para no inflar cifras |
-| Exactitud de muestra | Comprobar manualmente 30 contactos, o todos si hay menos; distinguir perfil de web enlazada y terceros |
-| Costo real | Facturación por etapa, repeticiones, arranques y costo por perfil con contacto útil |
-| Recuperación | Reiniciar worker, releer dataset, repetir página y probar continuación sin duplicar datos locales |
-| Duración | Medida con límites y concurrencia registrados; no extrapolar una promesa de minutos desde la publicidad |
+| Medida                            | Definición                                                                                                                              |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Seguidores declarados             | Contador de la cuenta y fecha en que se observó; puede estar ausente                                                                    |
+| Filas recibidas y usuarios únicos | Duplicados identificados por ID, separados de perfiles sin ID                                                                           |
+| Cobertura comprobable             | Comparación por IDs con una referencia propia del mismo momento cuando exista; en cuentas grandes sin referencia, cobertura desconocida |
+| Perfiles consultados              | Exitosos, privados omitidos, inaccesibles y errores, con denominadores claros                                                           |
+| Contactos recuperados             | Perfiles con correo, con teléfono y con ambos; también valores distintos para no inflar cifras                                          |
+| Exactitud de muestra              | Comprobar manualmente 30 contactos, o todos si hay menos; distinguir perfil de web enlazada y terceros                                  |
+| Costo real                        | Facturación por etapa, repeticiones, arranques y costo por perfil con contacto útil                                                     |
+| Recuperación                      | Reiniciar worker, releer dataset, repetir página y probar continuación sin duplicar datos locales                                       |
+| Duración                          | Medida con límites y concurrencia registrados; no extrapolar una promesa de minutos desde la publicidad                                 |
 
 Condiciones técnicas para continuar: evidencia trazable en todos los contactos de la muestra, cero contactos inventados, deduplicación estable y comportamiento comprobado ante reinicio, error y límite de presupuesto. Una sola atribución incorrecta bloquea esa regla de extracción hasta corregirla. La meta de cobertura se evalúa contra la referencia disponible, no contra un porcentaje arbitrario del contador.
 
@@ -138,14 +138,14 @@ La lectura del dataset admite `offset` y `limit` en orden de incorporación. Gua
 
 Usar tablas propias con migraciones aditivas. El número de la migración se toma del estado del repositorio al implementar; actualmente existen cambios de servicios en curso que hay que preservar.
 
-| Tabla propuesta | Contenido e invariantes |
-| --- | --- |
-| `instagram_runs` | Cuenta objetivo, usuario que inicia, criterios versionados, límites, presupuesto, estado, etapa, contadores, motivo de detención y fechas |
-| `instagram_provider_jobs` | Etapa y lote, proveedor y versión, estado remoto, ID remoto y dataset, desplazamiento, continuación cifrada, generación del intento y costo reservado y confirmado |
-| `instagram_profiles` | Identidad por ID de Instagram como texto, usuario actual y última observación; el nombre de usuario puede cambiar |
-| `instagram_run_profiles` | Una fila por ejecución y perfil; evidencia de pertenencia a esa audiencia, instantánea del perfil, fecha y estado de enriquecimiento |
-| `instagram_contacts` | Contacto normalizado de un perfil; único por perfil, tipo y valor normalizado |
-| `instagram_contact_observations` | Contacto, resultado de ejecución, trabajo de origen, campo, URL pública, valor observado, fecha y estado de validación |
+| Tabla propuesta                  | Contenido e invariantes                                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `instagram_runs`                 | Cuenta objetivo, usuario que inicia, criterios versionados, límites, presupuesto, estado, etapa, contadores, motivo de detención y fechas                          |
+| `instagram_provider_jobs`        | Etapa y lote, proveedor y versión, estado remoto, ID remoto y dataset, desplazamiento, continuación cifrada, generación del intento y costo reservado y confirmado |
+| `instagram_profiles`             | Identidad por ID de Instagram como texto, usuario actual y última observación; el nombre de usuario puede cambiar                                                  |
+| `instagram_run_profiles`         | Una fila por ejecución y perfil; evidencia de pertenencia a esa audiencia, instantánea del perfil, fecha y estado de enriquecimiento                               |
+| `instagram_contacts`             | Contacto normalizado de un perfil; único por perfil, tipo y valor normalizado                                                                                      |
+| `instagram_contact_observations` | Contacto, resultado de ejecución, trabajo de origen, campo, URL pública, valor observado, fecha y estado de validación                                             |
 
 Índices únicos adicionales: proveedor e ID remoto; ejecución, etapa y clave determinista del lote; ejecución y perfil. Indexar la consulta de resultados por ejecución y orden estable. Usar importes decimales o unidades monetarias enteras de precisión suficiente, no números de coma flotante para presupuestos.
 
@@ -207,10 +207,10 @@ No deducir departamento o municipio de un nombre ambiguo, un prefijo aislado o l
 
 Las tarifas siguientes corresponden a las tablas públicas consultadas el 15 de noviembre de 2026. Deben verificarse otra vez antes del piloto. Son costos por procesamiento, no precios por correo recuperado.
 
-| Etapa, por 1.000 resultados facturables | Free | Starter | Business |
-| --- | ---: | ---: | ---: |
-| Listado mantenido por Apify | USD 2,00 | USD 1,75 | USD 1,15 |
-| Perfiles mantenido por Apify, sin complemento About | USD 2,60 | USD 2,30 | USD 1,60 |
+| Etapa, por 1.000 resultados facturables                    |     Free |  Starter | Business |
+| ---------------------------------------------------------- | -------: | -------: | -------: |
+| Listado mantenido por Apify                                | USD 2,00 | USD 1,75 | USD 1,15 |
+| Perfiles mantenido por Apify, sin complemento About        | USD 2,60 | USD 2,30 | USD 1,60 |
 | Suma si se factura un resultado de cada etapa por seguidor | USD 4,60 | USD 4,05 | USD 2,75 |
 
 Starter anuncia USD 19 mensuales utilizables como crédito y Business USD 999. El «desde USD 2,75 por 1.000» de combinar ambos actores corresponde a Business y no representa el desembolso para una aplicación pequeña. [Tarifas del listado](https://apify.com/apify/instagram-followers-following-scraper/pricing), [tarifas de perfiles](https://apify.com/apify/instagram-profile-scraper/pricing).
@@ -218,10 +218,10 @@ Starter anuncia USD 19 mensuales utilizables como crédito y Business USD 999. E
 Con Starter, suponiendo una fila facturable de listado y una de perfil por usuario, sin repeticiones, complementos, webs ni otros consumos:
 
 | Volumen | Consumo calculado | Factura mensual mínima estimada si fuera el único consumo |
-| --- | ---: | ---: |
-| 1.000 | USD 4,05 | USD 19,00 |
-| 10.000 | USD 40,50 | USD 40,50 |
-| 100.000 | USD 405,00 | USD 405,00 |
+| ------- | ----------------: | --------------------------------------------------------: |
+| 1.000   |          USD 4,05 |                                                 USD 19,00 |
+| 10.000  |         USD 40,50 |                                                 USD 40,50 |
+| 100.000 |        USD 405,00 |                                                USD 405,00 |
 
 El crédito mensual no se suma otra vez al consumo: bajo ese supuesto la factura es el mayor entre el mínimo mensual y el consumo. Excluir perfiles privados del enriquecimiento o reutilizar datos recientes puede reducir consumo; releer usuarios en una nueva extracción puede aumentarlo. La tabla es un escenario de cálculo, no una cotización de contactos recuperables.
 
@@ -235,17 +235,17 @@ Ejemplo puramente aritmético: USD 40,50 de consumo y 1.000 perfiles con contact
 
 ## API e interfaz propuestas
 
-| Ruta | Comportamiento |
-| --- | --- |
-| `GET /api/instagram/capabilities` | Disponibilidad, límites y capacidades del proveedor configurado; sin secretos |
-| `POST /api/instagram/targets/resolve` | Canoniza usuario o URL y resuelve la cuenta con cuota y costo controlados |
-| `POST /api/instagram/runs` | Crea y encola con clave de idempotencia del cliente y límites explícitos; responde 202 o devuelve la ejecución ya creada |
-| `GET /api/instagram/runs` | Historial paginado permitido al usuario |
-| `GET /api/instagram/runs/:id` | Estado, etapa, cifras, límites y costos |
-| `GET /api/instagram/runs/:id/results` | Resultados paginados y filtros aplicados en el servidor |
-| `POST /api/instagram/runs/:id/cancel` | Detiene el despacho y tramita cancelación remota cuando existe |
-| `POST /api/instagram/runs/:id/resume` | Retoma un trabajo parcial recuperable con nuevo control de presupuesto; no reabre un resultado terminado |
-| `GET /api/instagram/runs/:id/export` | Exportación con los mismos filtros, autorización y supresiones vigentes |
+| Ruta                                  | Comportamiento                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/instagram/capabilities`     | Disponibilidad, límites y capacidades del proveedor configurado; sin secretos                                            |
+| `POST /api/instagram/targets/resolve` | Canoniza usuario o URL y resuelve la cuenta con cuota y costo controlados                                                |
+| `POST /api/instagram/runs`            | Crea y encola con clave de idempotencia del cliente y límites explícitos; responde 202 o devuelve la ejecución ya creada |
+| `GET /api/instagram/runs`             | Historial paginado permitido al usuario                                                                                  |
+| `GET /api/instagram/runs/:id`         | Estado, etapa, cifras, límites y costos                                                                                  |
+| `GET /api/instagram/runs/:id/results` | Resultados paginados y filtros aplicados en el servidor                                                                  |
+| `POST /api/instagram/runs/:id/cancel` | Detiene el despacho y tramita cancelación remota cuando existe                                                           |
+| `POST /api/instagram/runs/:id/resume` | Retoma un trabajo parcial recuperable con nuevo control de presupuesto; no reabre un resultado terminado                 |
+| `GET /api/instagram/runs/:id/export`  | Exportación con los mismos filtros, autorización y supresiones vigentes                                                  |
 
 Usar la sesión existente y un espacio compartido por el equipo de ICM. Los comerciales autorizados consultan, inician y exportan análisis del equipo; cada ejecución conserva quién la inició. Pueden cancelar sus propias ejecuciones; el administrador puede cancelar cualquiera, configurar límites y gestionar bajas. Comprobar esos permisos en el backend, también al exportar o reanudar. No introducir aislamiento por clientes externos ni un `tenantId` para esta versión interna.
 
@@ -271,20 +271,20 @@ En CSV, neutralizar valores que una hoja de cálculo pueda interpretar como fór
 
 ## Cambios previstos en el repositorio
 
-| Área | Trabajo |
-| --- | --- |
-| `apps/api/src/modules/instagram/` | Puertos, adaptadores, orquestación, importación paginada, normalización, resultados y rutas |
-| `apps/api/src/app.ts` | Registrar rutas protegidas del módulo |
-| `apps/api/src/worker.ts` | Registrar sus tareas y recuperación |
-| `apps/api/src/env.ts` y `.env.example` | Activación, claves, actor y versión, límites de concurrencia, gasto y retención |
-| `packages/shared/src/instagram.ts` y exportaciones | Contratos Zod y DTOs sin secretos |
-| `packages/shared/src/queues.ts` | Tareas breves y tipadas del módulo |
-| `packages/db/src/schema/instagram.ts`, exportaciones y migraciones | Tablas e índices propios; cambios aditivos de supresión |
-| `apps/api/src/modules/compliance/` | Supresión de identidad social y retirada de datos, preservando el comportamiento de REPS |
-| `apps/web/src/features/instagram/` | Formulario, historial, progreso, tabla, filtros y exportación |
-| `apps/web/src/router.tsx` y `features/auth/app-layout.tsx` | Ruta y acceso desde la navegación |
-| `apps/api/src/test/` | Pruebas contra PostgreSQL y fixtures de proveedor sin datos personales reales |
-| `docs/fuentes/instagram.md` y README | Contratos comprobados, límites, configuración y operación |
+| Área                                                               | Trabajo                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `apps/api/src/modules/instagram/`                                  | Puertos, adaptadores, orquestación, importación paginada, normalización, resultados y rutas |
+| `apps/api/src/app.ts`                                              | Registrar rutas protegidas del módulo                                                       |
+| `apps/api/src/worker.ts`                                           | Registrar sus tareas y recuperación                                                         |
+| `apps/api/src/env.ts` y `.env.example`                             | Activación, claves, actor y versión, límites de concurrencia, gasto y retención             |
+| `packages/shared/src/instagram.ts` y exportaciones                 | Contratos Zod y DTOs sin secretos                                                           |
+| `packages/shared/src/queues.ts`                                    | Tareas breves y tipadas del módulo                                                          |
+| `packages/db/src/schema/instagram.ts`, exportaciones y migraciones | Tablas e índices propios; cambios aditivos de supresión                                     |
+| `apps/api/src/modules/compliance/`                                 | Supresión de identidad social y retirada de datos, preservando el comportamiento de REPS    |
+| `apps/web/src/features/instagram/`                                 | Formulario, historial, progreso, tabla, filtros y exportación                               |
+| `apps/web/src/router.tsx` y `features/auth/app-layout.tsx`         | Ruta y acceso desde la navegación                                                           |
+| `apps/api/src/test/`                                               | Pruebas contra PostgreSQL y fixtures de proveedor sin datos personales reales               |
+| `docs/fuentes/instagram.md` y README                               | Contratos comprobados, límites, configuración y operación                                   |
 
 No modificar el contrato de búsqueda de salud para encajar seguidores. No reutilizar un placeholder de enriquecimiento de empresas como si ya ofreciera un rastreador web seguro y operativo. Revisar el estado del árbol al empezar y preservar los cambios actuales de servicios habilitados.
 
@@ -292,17 +292,17 @@ No modificar el contrato de búsqueda de salud para encajar seguidores. No reuti
 
 Las pruebas de proveedor usarán respuestas grabadas y saneadas o un servidor falso. Las pruebas ordinarias no harán scraping en vivo ni consumirán créditos.
 
-| Grupo | Casos que deben demostrarse |
-| --- | --- |
-| Entrada y autorización | URL válida; perfil con parámetros; dominio falso; ruta de publicación; usuario inválido; acceso sin rol autorizado; cancelación ajena sin permiso; secretos ausentes del navegador |
-| Enumeración | Varias páginas, usuarios repetidos, cambio de usuario con mismo ID, datos sin ID, cursor repetido, restricción con respuesta 200, lista truncada y cero ambiguo |
-| Enriquecimiento | Perfil sin contactos, privado omitido, campos empresariales frente a biografía, correo compartido entre perfiles, teléfono internacional o ambiguo y contacto de un tercero en una web |
-| Persistencia | Fallo antes del commit de página: ningún avance; fallo después del commit: reentrega sin duplicar datos o cifras; cierre coherente con el último lote |
-| Concurrencia | Dos peticiones con misma idempotencia, dos workers en un lote, intento reemplazado que reporta tarde y reserva de presupuesto simultánea |
-| Recuperación remota | Timeout tras inicio, ID remoto ya conocido, inicio incierto sin nuevo cargo automático, dataset disponible con worker reiniciado y continuación caducada |
-| Límites | Presupuesto y máximo de usuarios; cancelación con proveedor activo; errores 429 y 5xx; JSON o esquema cambiado; ningún cierre que anuncie cobertura total sin evidencia |
-| Baja y exportación | Supresión antes y después de incorporar, no reimportar, exportar todas las páginas filtradas, neutralizar fórmulas y no atribuir el mismo contacto a otra cuenta |
-| Web | IP privada, redirección a red interna, cambio de DNS, límite de bytes y tiempo, enlace ajeno y página de enlaces con contactos de soporte |
+| Grupo                  | Casos que deben demostrarse                                                                                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Entrada y autorización | URL válida; perfil con parámetros; dominio falso; ruta de publicación; usuario inválido; acceso sin rol autorizado; cancelación ajena sin permiso; secretos ausentes del navegador     |
+| Enumeración            | Varias páginas, usuarios repetidos, cambio de usuario con mismo ID, datos sin ID, cursor repetido, restricción con respuesta 200, lista truncada y cero ambiguo                        |
+| Enriquecimiento        | Perfil sin contactos, privado omitido, campos empresariales frente a biografía, correo compartido entre perfiles, teléfono internacional o ambiguo y contacto de un tercero en una web |
+| Persistencia           | Fallo antes del commit de página: ningún avance; fallo después del commit: reentrega sin duplicar datos o cifras; cierre coherente con el último lote                                  |
+| Concurrencia           | Dos peticiones con misma idempotencia, dos workers en un lote, intento reemplazado que reporta tarde y reserva de presupuesto simultánea                                               |
+| Recuperación remota    | Timeout tras inicio, ID remoto ya conocido, inicio incierto sin nuevo cargo automático, dataset disponible con worker reiniciado y continuación caducada                               |
+| Límites                | Presupuesto y máximo de usuarios; cancelación con proveedor activo; errores 429 y 5xx; JSON o esquema cambiado; ningún cierre que anuncie cobertura total sin evidencia                |
+| Baja y exportación     | Supresión antes y después de incorporar, no reimportar, exportar todas las páginas filtradas, neutralizar fórmulas y no atribuir el mismo contacto a otra cuenta                       |
+| Web                    | IP privada, redirección a red interna, cambio de DNS, límite de bytes y tiempo, enlace ajeno y página de enlaces con contactos de soporte                                              |
 
 Validar migraciones y flujo contra PostgreSQL 16, conservando las pruebas de búsqueda de salud. Ejecutar lint, typecheck, build y las pruebas pertinentes cuando se implemente. La revisión visual debe demostrar una ejecución en cola, progreso, recarga, resultado parcial y cancelación; el piloto real debe mostrar además los datos y costos del proveedor elegido.
 
@@ -312,15 +312,15 @@ La entrega no está aceptada solo porque un job termine en verde: debe poder exp
 
 Estimación inicial para una persona familiarizada con el repositorio. Son horas de trabajo técnico, no fechas comprometidas; la respuesta de proveedores y las condiciones de acceso no están incluidas. Reestimar tras el piloto.
 
-| Fase | Entrega revisable | Estimación |
-| --- | --- | ---: |
-| 0 | Herramienta de piloto, contratos y comparación con costo real; elección de proveedor | 8 a 12 h |
-| 1 | Modelo propio, migración, contratos, configuración y creación transaccional de ejecución | 10 a 14 h |
-| 2 | Enumeración y enriquecimiento por lotes, recuperación, presupuestos y cancelación | 18 a 26 h |
-| 3 | Extracción de webs enlazadas con límites, atribución y protección de red | 10 a 16 h |
-| 4 | Pantalla, progreso, historial, filtros, procedencia y CSV | 12 a 18 h |
-| 5 | Regresión, baja, fallos, revisión visual, piloto final y documentación operativa | 12 a 18 h |
-| Total | Función con extracción pública, web opcional y operación comprobada | 70 a 104 h |
+| Fase  | Entrega revisable                                                                        | Estimación |
+| ----- | ---------------------------------------------------------------------------------------- | ---------: |
+| 0     | Herramienta de piloto, contratos y comparación con costo real; elección de proveedor     |   8 a 12 h |
+| 1     | Modelo propio, migración, contratos, configuración y creación transaccional de ejecución |  10 a 14 h |
+| 2     | Enumeración y enriquecimiento por lotes, recuperación, presupuestos y cancelación        |  18 a 26 h |
+| 3     | Extracción de webs enlazadas con límites, atribución y protección de red                 |  10 a 16 h |
+| 4     | Pantalla, progreso, historial, filtros, procedencia y CSV                                |  12 a 18 h |
+| 5     | Regresión, baja, fallos, revisión visual, piloto final y documentación operativa         |  12 a 18 h |
+| Total | Función con extracción pública, web opcional y operación comprobada                      | 70 a 104 h |
 
 La fase 3 puede entregarse después de la primera versión de perfiles, reduciendo esa primera entrega a 60 a 88 horas. La procedencia, el control de gasto y la recuperación forman parte del primer flujo operativo; no deben quedar como arreglos posteriores.
 

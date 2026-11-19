@@ -31,14 +31,14 @@ Se abrió su herramienta de exportación y se introdujo `https://www.instagram.c
 
 El sitio mostró una lista de seguidores y permitió descargar `natgeo_followers.csv`. Se leyó el archivo local y se comprobaron:
 
-| Medida | Resultado observado |
-| --- | --- |
-| Filas de datos | 41 |
-| Usuarios distintos | 41 |
-| Columnas | `username`, `full_name`, `profile_url`, `verified`, `private` |
-| Correos en el esquema | No |
-| Teléfonos en el esquema | No |
-| Consumo indicado por la interfaz | Pasó de 3 a 2 consultas gratuitas restantes |
+| Medida                           | Resultado observado                                           |
+| -------------------------------- | ------------------------------------------------------------- |
+| Filas de datos                   | 41                                                            |
+| Usuarios distintos               | 41                                                            |
+| Columnas                         | `username`, `full_name`, `profile_url`, `verified`, `private` |
+| Correos en el esquema            | No                                                            |
+| Teléfonos en el esquema          | No                                                            |
+| Consumo indicado por la interfaz | Pasó de 3 a 2 consultas gratuitas restantes                   |
 
 Esto demuestra la entrega y exportación de la muestra por ese servicio. No se contrastó cada relación de seguimiento contra Instagram ni se acreditó la actualidad o integridad de la lista.
 
@@ -93,10 +93,10 @@ El perfil cuesta un crédito. La opción `include=contacts` añade la búsqueda 
 
 Ejemplo aritmético, sin caché, reintentos ni perfiles privados omitidos:
 
-| Muestra hipotética | Listado a 50 filas por página | Consulta de cada perfil público | Total estimado |
-| --- | ---: | ---: | ---: |
-| 100 seguidores públicos | 10 a 20 créditos | 100 créditos | 110 a 120 créditos |
-| 300 seguidores públicos | 30 a 60 créditos | 300 créditos | 330 a 360 créditos |
+| Muestra hipotética      | Listado a 50 filas por página | Consulta de cada perfil público |     Total estimado |
+| ----------------------- | ----------------------------: | ------------------------------: | -----------------: |
+| 100 seguidores públicos |              10 a 20 créditos |                    100 créditos | 110 a 120 créditos |
+| 300 seguidores públicos |              30 a 60 créditos |                    300 créditos | 330 a 360 créditos |
 
 Es un escenario de presupuesto, no rendimiento medido ni un máximo garantizado: páginas más pequeñas pueden incrementar el consumo. La cuota inicial puede servir para una muestra menor o una audiencia con perfiles privados omitidos, pero no se debe anunciar que alcanza para enriquecer cien perfiles públicos. No se registró una cuenta ni se ejecutaron llamadas a estos endpoints.
 
@@ -116,13 +116,13 @@ Si «sin APIs de pago» excluye utilizar cuotas gratuitas de cualquier proveedor
 
 ## Herramientas que no resuelven el requisito
 
-| Herramienta o categoría | Hallazgo |
-| --- | --- |
-| Instaloader 4.16 y el piloto actual | Su consulta de seguidores requiere una sesión de Instagram; añadir una interfaz de URL no elimina ese requisito |
-| Whoisit | No solicita subir contraseña o cookies, pero ejecuta las consultas dentro de una pestaña de Instagram ya autenticada |
-| Analizadores de exportaciones de Instagram | Procesan un archivo que el usuario debe obtener previamente; no descubren seguidores desde la URL de un tercero |
-| instascrape de chris-greening | El ejemplo de `followers` devuelve un contador, y el repositorio está archivado; no prueba enumeración actual de identidades |
-| instagrapi | Su guía de seguidores usa flujos autenticados y API móvil; no se verificó un recorrido completo anónimo que cumpla el objetivo |
+| Herramienta o categoría                    | Hallazgo                                                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Instaloader 4.16 y el piloto actual        | Su consulta de seguidores requiere una sesión de Instagram; añadir una interfaz de URL no elimina ese requisito                |
+| Whoisit                                    | No solicita subir contraseña o cookies, pero ejecuta las consultas dentro de una pestaña de Instagram ya autenticada           |
+| Analizadores de exportaciones de Instagram | Procesan un archivo que el usuario debe obtener previamente; no descubren seguidores desde la URL de un tercero                |
+| instascrape de chris-greening              | El ejemplo de `followers` devuelve un contador, y el repositorio está archivado; no prueba enumeración actual de identidades   |
+| instagrapi                                 | Su guía de seguidores usa flujos autenticados y API móvil; no se verificó un recorrido completo anónimo que cumpla el objetivo |
 
 Fuentes primarias: [seguidores en Instaloader](https://instaloader.github.io/module/structures.html#instaloader.Profile.get_followers), [modelo de privacidad de Whoisit](https://github.com/itzstebin/Whoisit), [analizador manual de TheMIU](https://github.com/TheMIU/Instagram-Follower-Analyzer), [ejemplo y estado de instascrape](https://github.com/chris-greening/instascrape), [guía de usuarios de instagrapi](https://github.com/subzeroid/instagrapi/blob/master/docs/usage-guide/user.md).
 
