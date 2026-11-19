@@ -35,11 +35,12 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
  *   resolución              → 'R'
  *   página, cursor null     → 'N'
  *   página, cursor de texto → 'S' || cursor   (incluidos "null" y la cadena vacía)
+ *   perfil de un seguidor   → 'P' || ID del seguidor
  * Ocupa siempre 32 bytes, así que los índices únicos admiten cursores de cualquier longitud
  * sin truncarlos. El cursor original se guarda íntegro en `request_cursor`; un CHECK obliga a
  * que la clave sea exactamente el hash de ese cursor.
  */
-export const INSTAGRAM_OPERATION_KEY_SQL = `sha256(convert_to(case when kind = 'resolve' then 'R' when request_cursor is null then 'N' else 'S' || request_cursor end, 'UTF8'))`;
+export const INSTAGRAM_OPERATION_KEY_SQL = `sha256(convert_to(case when kind = 'resolve' then 'R' when kind = 'profile' then 'P' || profile_pk when request_cursor is null then 'N' else 'S' || request_cursor end, 'UTF8'))`;
 
 export const instagramRuns = pgTable(
   "instagram_runs",
@@ -51,6 +52,8 @@ export const instagramRuns = pgTable(
     requested: integer("requested").notNull(),
     /** Tope de intentos, incluida la resolución. Solo puede ampliarse. */
     budgetMaxCalls: integer("budget_max_calls").notNull(),
+    /** Consultar el perfil de cada seguidor público seleccionado (mismo presupuesto). */
+    enrichProfiles: boolean("enrich_profiles").notNull().default(false),
     /** Intentos reservados hasta ahora (todos ocupan presupuesto). */
     attemptCount: integer("attempt_count").notNull().default(0),
     /** Páginas confirmadas: el siguiente page_no es page_count + 1. */
@@ -107,7 +110,7 @@ export const instagramAttempts = pgTable(
       .references(() => instagramRuns.id, { onDelete: "cascade" }),
     /** 1..n dentro de la ejecución. */
     attemptNo: integer("attempt_no").notNull(),
-    /** resolve | page. */
+    /** resolve | page | profile. */
     kind: text("kind").notNull(),
     /**
      * Cursor solicitado, íntegro y opaco: es el valor que se reenvía al proveedor y el único
@@ -115,6 +118,8 @@ export const instagramAttempts = pgTable(
      * `kind`); "null" y "" son cursores de texto distintos de null.
      */
     requestCursor: text("request_cursor"),
+    /** ID del seguidor cuyo perfil se consulta (solo en intentos `profile`). */
+    profilePk: text("profile_pk"),
     /** SHA-256 de la operación (ver INSTAGRAM_OPERATION_KEY_SQL); ligado por CHECK. */
     operationKey: bytea("operation_key").notNull(),
     /** reserved | succeeded | failed | uncertain. */
@@ -143,10 +148,15 @@ export const instagramAttempts = pgTable(
       .on(t.runId)
       .where(sql`${t.kind} = 'resolve' and ${t.status} = 'succeeded'`),
     check("instagram_attempts_attempt_no_check", sql`${t.attemptNo} > 0`),
-    check("instagram_attempts_kind_check", sql`${t.kind} in ('resolve', 'page')`),
+    check("instagram_attempts_kind_check", sql`${t.kind} in ('resolve', 'page', 'profile')`),
+    // Solo una página lleva cursor; solo una consulta de perfil lleva el ID del seguidor.
     check(
       "instagram_attempts_resolve_cursor_check",
-      sql`${t.kind} <> 'resolve' or ${t.requestCursor} is null`,
+      sql`${t.kind} = 'page' or ${t.requestCursor} is null`,
+    ),
+    check(
+      "instagram_attempts_profile_pk_check",
+      sql`(${t.kind} = 'profile') = (${t.profilePk} is not null)`,
     ),
     // La clave es exactamente el hash del cursor guardado: no puede apuntar a otra operación.
     check(
@@ -238,6 +248,10 @@ export const instagramRunFollowers = pgTable(
     /** Las observaciones del mismo ID no coincidieron en privacidad. */
     privacyConflict: boolean("privacy_conflict").notNull().default(false),
     firstPageNo: integer("first_page_no").notNull(),
+    /** pending | done | private | not_found (ver el núcleo). Un privado nunca queda pendiente. */
+    enrichment: text("enrichment").notNull().default("pending"),
+    /** Intento que consultó su perfil (null si no se consultó). */
+    enrichedAttemptNo: integer("enriched_attempt_no"),
   },
   (t) => [
     primaryKey({ name: "instagram_run_followers_pk", columns: [t.runId, t.followerPk] }),
@@ -253,5 +267,67 @@ export const instagramRunFollowers = pgTable(
       "instagram_run_followers_conflict_check",
       sql`not ${t.privacyConflict} or ${t.isPrivate}`,
     ),
+    foreignKey({
+      name: "instagram_run_followers_enriched_attempt_fk",
+      columns: [t.runId, t.enrichedAttemptNo],
+      foreignColumns: [instagramAttempts.runId, instagramAttempts.attemptNo],
+    }),
+    check(
+      "instagram_run_followers_enrichment_check",
+      sql`${t.enrichment} in ('pending', 'done', 'private', 'not_found')`,
+    ),
+    // Un seguidor privado nunca queda pendiente de consultar.
+    check(
+      "instagram_run_followers_private_check",
+      sql`not (${t.isPrivate} and ${t.enrichment} = 'pending')`,
+    ),
+    // Consultado (done / not_found) ⇔ hay intento; pendiente ⇒ no lo hay.
+    check(
+      "instagram_run_followers_enriched_attempt_check",
+      sql`(${t.enrichment} in ('done', 'not_found') and ${t.enrichedAttemptNo} is not null) or (${t.enrichment} = 'pending' and ${t.enrichedAttemptNo} is null) or ${t.enrichment} = 'private'`,
+    ),
+  ],
+);
+
+/**
+ * Contacto publicado en el perfil de un seguidor (botón comercial o biografía), con su
+ * procedencia. Datos personales: sin borrado automático por decisión del responsable; se
+ * eliminan en cascada con la ejecución o el seguidor.
+ */
+export const instagramFollowerContacts = pgTable(
+  "instagram_follower_contacts",
+  {
+    runId: uuid("run_id").notNull(),
+    followerPk: text("follower_pk").notNull(),
+    /** email | phone. */
+    kind: text("kind").notNull(),
+    /** Valor normalizado (correo en minúsculas; teléfono en dígitos, con + si es internacional). */
+    value: text("value").notNull(),
+    /** Texto tal como apareció en el perfil. */
+    original: text("original").notNull(),
+    /** button | biography. */
+    source: text("source").notNull(),
+    /** Intento (consulta del perfil) que lo observó. */
+    attemptNo: integer("attempt_no").notNull(),
+    observedAt: timestamp("observed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      name: "instagram_follower_contacts_pk",
+      columns: [t.runId, t.followerPk, t.kind, t.value],
+    }),
+    foreignKey({
+      name: "instagram_follower_contacts_follower_fk",
+      columns: [t.runId, t.followerPk],
+      foreignColumns: [instagramRunFollowers.runId, instagramRunFollowers.followerPk],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "instagram_follower_contacts_attempt_fk",
+      columns: [t.runId, t.attemptNo],
+      foreignColumns: [instagramAttempts.runId, instagramAttempts.attemptNo],
+    }).onDelete("cascade"),
+    check("instagram_follower_contacts_kind_check", sql`${t.kind} in ('email', 'phone')`),
+    check("instagram_follower_contacts_source_check", sql`${t.source} in ('button', 'biography')`),
+    check("instagram_follower_contacts_value_check", sql`${t.value} <> ''`),
   ],
 );

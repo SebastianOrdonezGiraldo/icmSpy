@@ -11,6 +11,7 @@ import {
   applyFailure,
   applyFinish,
   applyPage,
+  applyProfile,
   applyRecover,
   applyReserve,
   applyResolve,
@@ -18,13 +19,14 @@ import {
   type KnownFollower,
   type Lease,
   type OperationRef,
+  type ProfileTarget,
   pagePks,
   type RequestGuard,
   type Reservation,
   type RunHead,
   type StopDecision,
 } from "./rules";
-import type { FollowersPage, Run, TargetAccount } from "./types";
+import type { FollowerProfile, FollowersPage, Run, StoredFollower, TargetAccount } from "./types";
 
 export interface RunStore {
   /** Crea la ejecución (sin intentos, páginas ni seguidores). */
@@ -50,6 +52,13 @@ export interface RunStore {
    * Exige un permiso de página de esta ejecución; el cursor se toma del propio permiso.
    */
   commitPage(runId: string, lease: Lease, page: FollowersPage): Promise<void>;
+  /**
+   * Confirma la consulta del perfil de un seguidor (permiso de perfil de esta ejecución): sus
+   * contactos y su estado de enriquecimiento, junto con el intento, en una operación atómica.
+   */
+  commitProfile(runId: string, lease: Lease, profile: FollowerProfile): Promise<void>;
+  /** Siguiente seguidor seleccionado, público y pendiente de consultar (lectura sin bloqueo). */
+  nextProfileToEnrich(runId: string): Promise<{ pk: string } | null>;
   /** Registra el fallo de un intento vigente de esta ejecución; devuelve la revisión resultante. */
   failAttempt(runId: string, lease: Lease, message: string): Promise<number>;
   /** Reconcilia como "uncertain" el intento indicado si sigue reservado (1) o nada (0). */
@@ -61,6 +70,17 @@ export interface RunStore {
     decision: StopDecision,
     guard?: RequestGuard,
   ): Promise<CollectResult>;
+}
+
+function profileTargetOf(f: StoredFollower | undefined): ProfileTarget | null {
+  if (!f) return null;
+  return {
+    pk: f.pk,
+    username: f.username,
+    order: f.order,
+    isPrivate: f.isPrivate,
+    enrichment: f.enrichment,
+  };
 }
 
 function headOf(run: Run): RunHead {
@@ -94,7 +114,17 @@ export class MemoryRunStore implements RunStore {
     op: OperationRef,
     guard?: RequestGuard,
   ): Promise<Reservation> {
-    return this.tx(runId, (head) => applyReserve(head, epoch, op, guard));
+    return this.tx(runId, (head, run) =>
+      applyReserve(
+        head,
+        epoch,
+        op,
+        guard,
+        op.kind === "profile"
+          ? profileTargetOf(run.followers.find((f) => f.pk === op.pk))
+          : undefined,
+      ),
+    );
   }
 
   async commitResolve(runId: string, lease: Lease, target: TargetAccount): Promise<void> {
@@ -113,10 +143,30 @@ export class MemoryRunStore implements RunStore {
         if (conflicts.has(f.pk)) {
           f.isPrivate = true;
           f.privacyConflict = true;
+          if (f.enrichment === "pending") f.enrichment = "private";
         }
       }
       run.followers.push(...plan.inserts);
     });
+  }
+
+  async commitProfile(runId: string, lease: Lease, profile: FollowerProfile): Promise<void> {
+    this.tx(runId, (head, run) => {
+      const pk = lease.operation.kind === "profile" ? lease.operation.pk : "";
+      const follower = run.followers.find((f) => f.pk === pk);
+      const plan = applyProfile(head, lease, profileTargetOf(follower), profile);
+      if (follower) {
+        follower.enrichment = plan.enrichment;
+        follower.contacts = plan.contacts;
+      }
+    });
+  }
+
+  async nextProfileToEnrich(runId: string): Promise<{ pk: string } | null> {
+    const run = this.snapshot(runId);
+    if (!run.enrichProfiles) return null;
+    const next = run.followers.find((f) => f.order <= run.requested && f.enrichment === "pending");
+    return next ? { pk: next.pk } : null;
   }
 
   async failAttempt(runId: string, lease: Lease, message: string): Promise<number> {

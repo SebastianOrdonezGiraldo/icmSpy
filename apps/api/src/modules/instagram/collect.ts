@@ -58,12 +58,20 @@ export interface CollectDeps {
 
 export async function createRun(
   store: RunStore,
-  input: { id: string; username: string; requested: number; budgetMaxCalls: number },
+  input: {
+    id: string;
+    username: string;
+    requested: number;
+    budgetMaxCalls: number;
+    /** Consultar el perfil de cada seguidor público seleccionado (mismo presupuesto). */
+    enrichProfiles?: boolean;
+  },
 ): Promise<void> {
   assertPositiveInteger(input.requested, "El número de seguidores");
   assertPositiveInteger(input.budgetMaxCalls, "El presupuesto");
   await store.create({
     ...input,
+    enrichProfiles: input.enrichProfiles ?? false,
     target: null,
     attempts: [],
     pages: [],
@@ -199,6 +207,19 @@ async function attempt(
     return { kind: "ok" };
   }
 
+  if (call.kind === "profile") {
+    let profile: Awaited<ReturnType<InstagramProvider["profile"]>> | null;
+    try {
+      profile = await untilAborted(provider.profile(call.pk), request?.signal);
+    } catch (err) {
+      return failure(store, runId, lease, err);
+    }
+    if (profile === null) return inFlight();
+    deps.beforeCommit?.(operationKey(op));
+    await store.commitProfile(runId, lease, profile);
+    return { kind: "ok" };
+  }
+
   let page: Awaited<ReturnType<InstagramProvider["followersPage"]>> | null;
   try {
     page = await untilAborted(provider.followersPage(call.targetPk, call.cursor), request?.signal);
@@ -252,8 +273,14 @@ export async function fetchPage(
       return { error: r.message };
     case "skip":
       if (r.reason === "already_confirmed" || isInProgress(r.reason)) return r.reason;
-      if (typeof r.reason !== "string" || r.reason === "already_resolved") {
-        throw new Error("Motivo imposible fuera de una entrega de job");
+      if (
+        typeof r.reason !== "string" ||
+        r.reason === "already_resolved" ||
+        r.reason === "already_enriched" ||
+        r.reason === "profile_not_selected" ||
+        r.reason === "enrichment_disabled"
+      ) {
+        throw new Error("Motivo imposible para una página");
       }
       return { skipped: r.reason };
     case "aborted":
@@ -322,11 +349,34 @@ export async function collect(
       }
     } else if (head.target.isPrivate) {
       decision = { reason: "target_private", revision: head.revision };
-    } else if (head.uniqueCount >= head.requested) {
-      // El excedente ya guardado cuenta antes de pedir otra página.
-      decision = { reason: "target_reached", revision: head.revision };
-    } else if (LIST_STOP[head.listState]) {
-      decision = { reason: LIST_STOP[head.listState] as StopReason, revision: head.revision };
+    } else if (head.uniqueCount >= head.requested || LIST_STOP[head.listState]) {
+      // Listado terminado (el excedente ya guardado cuenta antes de pedir otra página).
+      const listing: StopDecision =
+        head.uniqueCount >= head.requested
+          ? { reason: "target_reached", revision: head.revision }
+          : { reason: LIST_STOP[head.listState] as StopReason, revision: head.revision };
+      // Enriquecimiento: un perfil público seleccionado y pendiente por vuelta.
+      const next = head.enrichProfiles ? await store.nextProfileToEnrich(runId) : null;
+      if (!next) {
+        decision = listing;
+      } else {
+        const r = await attempt(deps, runId, epoch, { kind: "profile", pk: next.pk }, request);
+        if (r.kind === "ok") continue;
+        if (r.kind === "aborted") return r;
+        if (r.kind === "skip") {
+          if (isInProgress(r.reason)) return r.reason;
+          const handled = requestSkip(r.reason);
+          if (handled === null) {
+            // Otra entrega ya lo consultó o dejó de estar seleccionado: se reevalúa.
+            if (r.reason === "already_enriched" || r.reason === "profile_not_selected") continue;
+            throw new Error(`Perfil no aplicable: ${String(r.reason)}`);
+          }
+          if (!("revision" in handled && "reason" in handled)) return handled as CollectResult;
+          decision = handled as StopDecision;
+        } else {
+          decision = failureDecision(r);
+        }
+      }
     } else {
       const cursor = head.pages.length === 0 ? null : head.cursor;
       const r = await attempt(deps, runId, epoch, { kind: "page", cursor }, request);

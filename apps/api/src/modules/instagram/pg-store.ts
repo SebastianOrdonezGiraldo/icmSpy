@@ -28,6 +28,7 @@
 import { createHash } from "node:crypto";
 import {
   instagramAttempts,
+  instagramFollowerContacts,
   instagramPages,
   instagramRunFollowers,
   instagramRuns,
@@ -41,6 +42,7 @@ import {
   applyFinish,
   applyNewRequest,
   applyPage,
+  applyProfile,
   applyRecover,
   applyReserve,
   applyResolve,
@@ -50,8 +52,11 @@ import {
   type OperationInProgress,
   type OperationRef,
   type PagePlan,
+  type ProfilePlan,
+  type ProfileTarget,
   pageOperation,
   pagePks,
+  profileOperation,
   type RequestGuard,
   type Reservation,
   type RunHead,
@@ -61,6 +66,9 @@ import type { RunStore } from "./store";
 import type {
   Attempt,
   Cursor,
+  Enrichment,
+  FollowerContact,
+  FollowerProfile,
   FollowersPage,
   ListState,
   Outcome,
@@ -93,13 +101,23 @@ export interface PgRunStoreOptions {
  * INSTAGRAM_OPERATION_KEY_SQL; el CHECK de la base rechaza cualquier diferencia.
  */
 export function operationKeyBytes(op: OperationRef): Buffer {
-  const canonical = op.kind === "resolve" ? "R" : op.cursor === null ? "N" : `S${op.cursor}`;
+  const canonical =
+    op.kind === "resolve"
+      ? "R"
+      : op.kind === "profile"
+        ? `P${op.pk}`
+        : op.cursor === null
+          ? "N"
+          : `S${op.cursor}`;
   return createHash("sha256").update(canonical, "utf8").digest();
 }
 
 /** Operación lógica de un intento del núcleo ("resolve" o "page:<cursor en JSON>"). */
 function opOf(a: Attempt): OperationRef {
   if (a.kind === "resolve") return { kind: "resolve" };
+  if (a.kind === "profile") {
+    return { kind: "profile", pk: JSON.parse(a.operation.slice("profile:".length)) as string };
+  }
   return { kind: "page", cursor: JSON.parse(a.operation.slice("page:".length)) as Cursor | null };
 }
 
@@ -160,6 +178,7 @@ export class PgRunStore implements RunStore {
       username: run.username,
       requested: run.requested,
       budgetMaxCalls: run.budgetMaxCalls,
+      enrichProfiles: run.enrichProfiles,
       epoch: run.epoch,
       revision: run.revision,
       listState: run.listState,
@@ -200,7 +219,14 @@ export class PgRunStore implements RunStore {
       runId,
       "reserveAttempt",
       { attempts: "active", latest: true, pages: true },
-      (head) => applyReserve(head, epoch, op, guard),
+      async (head, tx) =>
+        applyReserve(
+          head,
+          epoch,
+          op,
+          guard,
+          op.kind === "profile" ? await loadProfileTarget(tx, runId, op.pk) : undefined,
+        ),
     );
   }
 
@@ -240,8 +266,35 @@ export class PgRunStore implements RunStore {
         const known = new Map<string, KnownFollower>(rows.map((r) => [r.pk, r]));
         plan = applyPage(head, lease, page, known);
       },
-      () => plan,
+      () => ({ page: plan, profile: null }),
     );
+  }
+
+  commitProfile(runId: string, lease: Lease, profile: FollowerProfile): Promise<void> {
+    let plan: ProfilePlan | null = null;
+    return this.write(
+      runId,
+      "commitProfile",
+      { attempts: "active", attemptNo: lease.attemptId, pages: false },
+      async (head, tx) => {
+        const pk = lease.operation.kind === "profile" ? lease.operation.pk : "";
+        plan = applyProfile(head, lease, await loadProfileTarget(tx, runId, pk), profile);
+      },
+      () => ({ page: null, profile: plan }),
+    );
+  }
+
+  async nextProfileToEnrich(runId: string): Promise<{ pk: string } | null> {
+    const r = await this.db.execute<{ pk: string }>(sql`
+      select f.follower_pk as pk
+        from instagram_run_followers f
+        join instagram_runs r on r.id = f.run_id
+       where f.run_id = ${runId} and r.enrich_profiles
+         and f.enrichment = 'pending' and f.ord <= r.requested
+       order by f.ord
+       limit 1`);
+    const row = r.rows[0];
+    return row ? { pk: row.pk } : null;
   }
 
   failAttempt(runId: string, lease: Lease, message: string): Promise<number> {
@@ -295,6 +348,22 @@ export class PgRunStore implements RunStore {
           .from(instagramRunFollowers)
           .where(eq(instagramRunFollowers.runId, runId))
           .orderBy(asc(instagramRunFollowers.ord));
+        const contactRows = await tx
+          .select()
+          .from(instagramFollowerContacts)
+          .where(eq(instagramFollowerContacts.runId, runId))
+          .orderBy(asc(instagramFollowerContacts.kind), asc(instagramFollowerContacts.value));
+        const contacts = new Map<string, FollowerContact[]>();
+        for (const c of contactRows) {
+          const list = contacts.get(c.followerPk) ?? [];
+          list.push({
+            kind: c.kind as FollowerContact["kind"],
+            value: c.value,
+            original: c.original,
+            source: c.source as FollowerContact["source"],
+          });
+          contacts.set(c.followerPk, list);
+        }
         return {
           ...fields,
           followers: followers.map(
@@ -305,6 +374,8 @@ export class PgRunStore implements RunStore {
               privacyConflict: f.privacyConflict,
               order: f.ord,
               firstPageNo: f.firstPageNo,
+              enrichment: f.enrichment as Enrichment,
+              contacts: contacts.get(f.followerPk) ?? [],
             }),
           ),
         };
@@ -322,7 +393,7 @@ export class PgRunStore implements RunStore {
     method: string,
     scope: Omit<LoadScope, "lock" | "afterRow">,
     rule: (head: RunHead, tx: Tx) => T | Promise<T>,
-    planOf: () => PagePlan | null = () => null,
+    plansOf: () => Plans = () => ({ page: null, profile: null }),
   ): Promise<T> {
     return this.transaction(async (tx) => {
       const loaded = await loadHead(tx, runId, { ...scope, lock: true });
@@ -332,7 +403,7 @@ export class PgRunStore implements RunStore {
       });
       const before = snapshotOf(loaded.head, loaded.pageCount);
       const result = await rule(loaded.head, tx);
-      await this.persist(tx, method, before, loaded, planOf());
+      await this.persist(tx, method, before, loaded, plansOf());
       return result;
     });
   }
@@ -342,7 +413,7 @@ export class PgRunStore implements RunStore {
     method: string,
     before: Before,
     loaded: Loaded,
-    plan: PagePlan | null,
+    { page: plan, profile }: Plans,
   ): Promise<void> {
     const after = loaded.head;
     const runId = after.id;
@@ -358,6 +429,7 @@ export class PgRunStore implements RunStore {
           attemptNo: a.id,
           kind: a.kind,
           requestCursor: op.kind === "page" ? op.cursor : null,
+          profilePk: op.kind === "profile" ? op.pk : null,
           operationKey: operationKeyBytes(op),
           status: a.status,
           epoch: after.epoch,
@@ -407,19 +479,52 @@ export class PgRunStore implements RunStore {
             isPrivate: f.isPrivate,
             privacyConflict: f.privacyConflict,
             firstPageNo: f.firstPageNo,
+            enrichment: f.enrichment,
           })),
         );
       }
       if (plan.privacyConflicts.length > 0) {
         await tx
           .update(instagramRunFollowers)
-          .set({ isPrivate: true, privacyConflict: true })
+          .set({
+            isPrivate: true,
+            privacyConflict: true,
+            // Un seguidor que pasa a privado deja de estar pendiente de consultar.
+            enrichment: sql`case when ${instagramRunFollowers.enrichment} = 'pending' then 'private' else ${instagramRunFollowers.enrichment} end`,
+          })
           .where(
             and(
               eq(instagramRunFollowers.runId, runId),
               inArray(instagramRunFollowers.followerPk, plan.privacyConflicts),
             ),
           );
+      }
+      step("followers");
+    }
+
+    // 3b. Consulta de perfil: estado del seguidor y sus contactos.
+    if (profile) {
+      await tx
+        .update(instagramRunFollowers)
+        .set({ enrichment: profile.enrichment, enrichedAttemptNo: profile.attemptId })
+        .where(
+          and(
+            eq(instagramRunFollowers.runId, runId),
+            eq(instagramRunFollowers.followerPk, profile.pk),
+          ),
+        );
+      if (profile.contacts.length > 0) {
+        await tx.insert(instagramFollowerContacts).values(
+          profile.contacts.map((c) => ({
+            runId,
+            followerPk: profile.pk,
+            kind: c.kind,
+            value: c.value,
+            original: c.original,
+            source: c.source,
+            attemptNo: profile.attemptId,
+          })),
+        );
       }
       step("followers");
     }
@@ -447,6 +552,26 @@ export class PgRunStore implements RunStore {
     }
     step("run");
   }
+}
+
+interface Plans {
+  page: PagePlan | null;
+  profile: ProfilePlan | null;
+}
+
+/** Seguidor cuyo perfil se consulta, leído dentro de la transacción (bajo el bloqueo). */
+async function loadProfileTarget(tx: Tx, runId: string, pk: string): Promise<ProfileTarget | null> {
+  const [f] = await tx
+    .select({
+      pk: instagramRunFollowers.followerPk,
+      username: instagramRunFollowers.username,
+      order: instagramRunFollowers.ord,
+      isPrivate: instagramRunFollowers.isPrivate,
+      enrichment: instagramRunFollowers.enrichment,
+    })
+    .from(instagramRunFollowers)
+    .where(and(eq(instagramRunFollowers.runId, runId), eq(instagramRunFollowers.followerPk, pk)));
+  return f ? { ...f, enrichment: f.enrichment as Enrichment } : null;
 }
 
 /** Lo necesario para calcular la diferencia en tiempo lineal. */
@@ -512,6 +637,7 @@ async function loadHead(tx: Tx, runId: string, scope: LoadScope): Promise<Loaded
             attemptNo: instagramAttempts.attemptNo,
             kind: instagramAttempts.kind,
             requestCursor: instagramAttempts.requestCursor,
+            profilePk: instagramAttempts.profilePk,
             status: instagramAttempts.status,
             error: instagramAttempts.error,
           })
@@ -555,6 +681,7 @@ async function loadHead(tx: Tx, runId: string, scope: LoadScope): Promise<Loaded
     username: row.username,
     requested: row.requested,
     budgetMaxCalls: row.budgetMaxCalls,
+    enrichProfiles: row.enrichProfiles,
     target:
       row.targetPk === null
         ? null
@@ -568,7 +695,12 @@ async function loadHead(tx: Tx, runId: string, scope: LoadScope): Promise<Loaded
     attempts: attempts.map(
       (a): Attempt => ({
         id: a.attemptNo,
-        operation: a.kind === "resolve" ? "resolve" : pageOperation(a.requestCursor),
+        operation:
+          a.kind === "resolve"
+            ? "resolve"
+            : a.kind === "profile"
+              ? profileOperation(a.profilePk as string)
+              : pageOperation(a.requestCursor),
         kind: a.kind as Attempt["kind"],
         status: a.status as Attempt["status"],
         ...(a.error !== null ? { error: a.error } : {}),

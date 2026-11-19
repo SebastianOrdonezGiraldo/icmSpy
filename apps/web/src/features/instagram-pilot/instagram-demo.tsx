@@ -24,10 +24,14 @@ interface DemoRow {
   username: string;
   profileUrl: string;
   isPrivate: boolean;
-  enrichment: "con_contacto" | "sin_contacto" | "privado";
+  enrichment: "con_contacto" | "sin_contacto" | "privado" | "pendiente" | "no_encontrado";
   email: string | null;
+  emailSource: "button" | "biography" | null;
   phone: string | null;
+  phoneSource: "button" | "biography" | null;
 }
+
+const SOURCE_LABEL = { button: "botón", biography: "biografía" } as const;
 
 interface DemoResult {
   runId: string;
@@ -37,13 +41,22 @@ interface DemoResult {
   stopReason: string | null;
   stopText: string | null;
   detail: string | null;
-  progress: { collected: number; requested: number; attempts: number; budget: number };
+  progress: {
+    collected: number;
+    requested: number;
+    profilesDone: number;
+    profilesToQuery: number;
+    attempts: number;
+    budget: number;
+  };
   summary: {
     rows: number;
     privateSkipped: number;
     withEmail: number;
     withPhone: number;
     withoutContact: number;
+    pending: number;
+    notFound: number;
   };
   rows: DemoRow[];
 }
@@ -77,7 +90,8 @@ export function InstagramDemo({ runId }: { runId?: string }) {
       <p className="text-sm text-muted-foreground">
         Las cuentas, los seguidores y los contactos de esta demo son ficticios: no se consulta
         Instagram ni ningún servicio externo. Se analizan {config.data?.requested ?? 50} seguidores
-        por búsqueda; los perfiles privados no se enriquecen.
+        por búsqueda y se consulta el perfil de cada seguidor público (botones de contacto y
+        biografía); los perfiles privados no se consultan.
       </p>
 
       {config.data && !config.data.enabled && (
@@ -147,12 +161,16 @@ function DemoRun({ runId }: { runId: string }) {
   if (!data) return <p className="text-sm text-muted-foreground">Cargando la búsqueda…</p>;
 
   const { progress, summary } = data;
-  const pct = Math.round((progress.collected / progress.requested) * 100);
+  // Dos etapas: listado de seguidores y consulta de los perfiles públicos seleccionados.
+  const total = progress.requested + progress.profilesToQuery;
+  const pct = Math.round(((progress.collected + progress.profilesDone) / Math.max(total, 1)) * 100);
   const statusText =
     data.status === "queued"
       ? "En cola: esperando al worker…"
       : data.status === "running"
-        ? "Buscando seguidores…"
+        ? progress.collected < progress.requested
+          ? "Buscando seguidores…"
+          : "Consultando los perfiles públicos…"
         : data.stopText;
 
   return (
@@ -184,18 +202,23 @@ function DemoRun({ runId }: { runId: string }) {
           <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          {progress.collected} de {progress.requested} seguidores · {progress.attempts} de{" "}
-          {progress.budget} llamadas
+          {progress.collected} de {progress.requested} seguidores · {progress.profilesDone} de{" "}
+          {progress.profilesToQuery} perfiles consultados · {progress.attempts} de {progress.budget}{" "}
+          llamadas
         </p>
       </div>
 
-      {data.status === "done" && (
+      {data.rows.length > 0 && (
         <>
-          <p className="text-sm">
-            {summary.rows} seguidores: {summary.withEmail} con correo, {summary.withPhone} con
-            teléfono, {summary.withoutContact} sin contacto publicado y {summary.privateSkipped}{" "}
-            privados sin enriquecer.
-          </p>
+          {data.status === "done" && (
+            <p className="text-sm">
+              {summary.rows} seguidores: {summary.withEmail} con correo, {summary.withPhone} con
+              teléfono, {summary.withoutContact} sin contacto publicado y {summary.privateSkipped}{" "}
+              privados sin enriquecer
+              {summary.notFound > 0 ? `; ${summary.notFound} perfiles no disponibles` : ""}
+              {summary.pending > 0 ? `; ${summary.pending} quedaron sin consultar` : ""}.
+            </p>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="border-b text-left text-muted-foreground">
@@ -219,10 +242,22 @@ function DemoRun({ runId }: { runId: string }) {
                       <td colSpan={2} className="py-1.5 text-muted-foreground">
                         Sin contacto publicado
                       </td>
+                    ) : r.enrichment === "pendiente" ? (
+                      <td colSpan={2} className="py-1.5 text-muted-foreground">
+                        Pendiente de consultar…
+                      </td>
+                    ) : r.enrichment === "no_encontrado" ? (
+                      <td colSpan={2} className="py-1.5 text-muted-foreground">
+                        Perfil no disponible
+                      </td>
                     ) : (
                       <>
-                        <td className="py-1.5 pr-4">{r.email ?? "—"}</td>
-                        <td className="py-1.5">{r.phone ?? "—"}</td>
+                        <td className="py-1.5 pr-4">
+                          <ContactCell value={r.email} source={r.emailSource} />
+                        </td>
+                        <td className="py-1.5">
+                          <ContactCell value={r.phone} source={r.phoneSource} />
+                        </td>
                       </>
                     )}
                   </tr>
@@ -233,5 +268,23 @@ function DemoRun({ runId }: { runId: string }) {
         </>
       )}
     </div>
+  );
+}
+
+function ContactCell({
+  value,
+  source,
+}: {
+  value: string | null;
+  source: "button" | "biography" | null;
+}) {
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span>
+      {value}
+      {source && (
+        <span className="ml-1 text-xs text-muted-foreground">({SOURCE_LABEL[source]})</span>
+      )}
+    </span>
   );
 }

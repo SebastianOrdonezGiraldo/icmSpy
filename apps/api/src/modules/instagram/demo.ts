@@ -1,18 +1,19 @@
 /**
  * Demo local de la recolección de Instagram con datos de prueba.
  *
- * Todo es sintético: las cuentas y seguidores salen de `SyntheticInstagramProvider` y los
- * contactos comerciales de `syntheticBusinessContact`, un directorio inventado y determinista
- * (dominio reservado `.example`, teléfonos de la serie 555). Los seguidores privados no se
- * enriquecen. Solo se habilita con INSTAGRAM_PROVIDER=fake fuera de producción.
+ * Todo es sintético: cuentas, seguidores y perfiles salen de `SyntheticInstagramProvider`
+ * (dominio reservado `.example`, teléfonos de la serie 555). El worker consulta el perfil de cada
+ * seguidor público seleccionado y guarda sus contactos en PostgreSQL; los privados no se
+ * consultan. Solo se habilita con INSTAGRAM_PROVIDER=fake fuera de producción.
  */
 import { selectedFollowers } from "./collect";
 import { estimateCalls } from "./estimate";
-import type { Outcome, Run, StopReason } from "./types";
+import type { Outcome, Run, StopReason, StoredFollower } from "./types";
 
 /** Seguidores a analizar en la demo y presupuesto (estimación + una llamada de margen). */
 export const DEMO_REQUESTED = 50;
-export const DEMO_BUDGET = estimateCalls({ requested: DEMO_REQUESTED }).total + 1;
+export const DEMO_BUDGET =
+  estimateCalls({ requested: DEMO_REQUESTED, enrichProfiles: true }).total + 1;
 
 export const DEMO_EXAMPLES = [
   {
@@ -55,24 +56,6 @@ export function parseInstagramProfileUrl(input: string): string | null {
   return username;
 }
 
-export interface DemoContact {
-  email: string | null;
-  phone: string | null;
-}
-
-/**
- * Directorio de contactos comerciales FICTICIOS de la demo. Para una cuenta cuyo usuario
- * contiene "sin_contacto", ningún seguidor publica contacto. En las demás, por posición:
- * 1 de cada 3 publica correo y teléfono, 1 de cada 3 solo correo y el resto nada.
- */
-export function syntheticBusinessContact(targetUsername: string, position: number): DemoContact {
-  if (targetUsername.includes("sin_contacto")) return { email: null, phone: null };
-  const kind = position % 3;
-  const email = kind === 0 ? null : `contacto${position}@negocio-demo.example`;
-  const phone = kind === 1 ? `+57 601 555 ${String(position).padStart(4, "0")}` : null;
-  return { email, phone };
-}
-
 const STOP_TEXT: Record<StopReason, string> = {
   target_reached: "Se alcanzó el número de seguidores pedido",
   source_limited: "La fuente limitó la lista de seguidores",
@@ -84,7 +67,12 @@ const STOP_TEXT: Record<StopReason, string> = {
   provider_error: "La fuente devolvió un error",
 };
 
-export type DemoEnrichment = "con_contacto" | "sin_contacto" | "privado";
+export type DemoEnrichment =
+  | "con_contacto"
+  | "sin_contacto"
+  | "privado"
+  | "pendiente"
+  | "no_encontrado";
 
 export interface DemoRow {
   position: number;
@@ -93,7 +81,9 @@ export interface DemoRow {
   isPrivate: boolean;
   enrichment: DemoEnrichment;
   email: string | null;
+  emailSource: "button" | "biography" | null;
   phone: string | null;
+  phoneSource: "button" | "biography" | null;
 }
 
 export interface DemoResult {
@@ -104,16 +94,32 @@ export interface DemoResult {
   stopReason: StopReason | null;
   stopText: string | null;
   detail: string | null;
-  progress: { collected: number; requested: number; attempts: number; budget: number };
+  progress: {
+    collected: number;
+    requested: number;
+    profilesDone: number;
+    profilesToQuery: number;
+    attempts: number;
+    budget: number;
+  };
   summary: {
     rows: number;
     privateSkipped: number;
     withEmail: number;
     withPhone: number;
     withoutContact: number;
+    pending: number;
+    notFound: number;
   };
   rows: DemoRow[];
 }
+
+const ENRICHMENT: Record<StoredFollower["enrichment"], DemoEnrichment> = {
+  pending: "pendiente",
+  private: "privado",
+  not_found: "no_encontrado",
+  done: "sin_contacto",
+};
 
 /** Resultado de una ejecución para la pantalla de la demo (también mientras avanza). */
 export function buildDemoResult(run: Run): DemoResult {
@@ -123,18 +129,26 @@ export function buildDemoResult(run: Run): DemoResult {
     : run.attempts.length === 0
       ? "queued"
       : "running";
-  const rows: DemoRow[] = selectedFollowers(run).map((f) => {
-    const base = {
+  const selected = selectedFollowers(run);
+  const rows: DemoRow[] = selected.map((f) => {
+    const email = f.contacts.find((c) => c.kind === "email") ?? null;
+    const phone = f.contacts.find((c) => c.kind === "phone") ?? null;
+    const enrichment: DemoEnrichment =
+      f.enrichment === "done" && (email || phone) ? "con_contacto" : ENRICHMENT[f.enrichment];
+    return {
       position: f.order,
       username: f.username,
       profileUrl: `https://www.instagram.com/${f.username}/`,
       isPrivate: f.isPrivate,
+      enrichment,
+      email: email?.value ?? null,
+      emailSource: email?.source ?? null,
+      phone: phone?.original ?? null,
+      phoneSource: phone?.source ?? null,
     };
-    if (f.isPrivate) return { ...base, enrichment: "privado", email: null, phone: null };
-    const contact = syntheticBusinessContact(run.username, f.order);
-    const has = contact.email !== null || contact.phone !== null;
-    return { ...base, enrichment: has ? "con_contacto" : "sin_contacto", ...contact };
   });
+  const count = (e: DemoEnrichment) => rows.filter((r) => r.enrichment === e).length;
+  const queried = selected.filter((f) => f.enrichment === "done" || f.enrichment === "not_found");
   return {
     runId: run.id,
     username: run.username,
@@ -146,15 +160,19 @@ export function buildDemoResult(run: Run): DemoResult {
     progress: {
       collected: Math.min(run.followers.length, run.requested),
       requested: run.requested,
+      profilesDone: queried.length,
+      profilesToQuery: queried.length + count("pendiente"),
       attempts: run.attempts.length,
       budget: run.budgetMaxCalls,
     },
     summary: {
       rows: rows.length,
-      privateSkipped: rows.filter((r) => r.enrichment === "privado").length,
+      privateSkipped: count("privado"),
       withEmail: rows.filter((r) => r.email).length,
       withPhone: rows.filter((r) => r.phone).length,
-      withoutContact: rows.filter((r) => r.enrichment === "sin_contacto").length,
+      withoutContact: count("sin_contacto"),
+      pending: count("pendiente"),
+      notFound: count("no_encontrado"),
     },
     rows,
   };

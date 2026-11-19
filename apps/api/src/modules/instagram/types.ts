@@ -33,9 +33,26 @@ export interface FollowersPage {
 }
 
 /** Puerto hacia la fuente (HikerAPI en producción; un falso en las pruebas). */
+/**
+ * Perfil público de un seguidor, tal como lo entrega la fuente. Los botones de contacto
+ * comerciales y la biografía son las dos fuentes de contactos admitidas.
+ */
+export type FollowerProfile =
+  | {
+      status: "ok";
+      isPrivate: boolean;
+      businessEmail: string | null;
+      businessPhone: string | null;
+      biography: string | null;
+    }
+  /** La cuenta ya no existe o no está disponible. */
+  | { status: "not_found" };
+
 export interface InstagramProvider {
   resolveAccount(username: string): Promise<TargetAccount>;
   followersPage(targetPk: string, cursor: Cursor | null): Promise<FollowersPage>;
+  /** Una llamada por perfil. Solo se consulta para seguidores públicos seleccionados. */
+  profile(pk: string): Promise<FollowerProfile>;
 }
 
 export type StopReason =
@@ -67,7 +84,7 @@ export interface Attempt {
   id: number;
   /** Operación lógica: "resolve" o "page:<cursor serializado>". Varios intentos pueden compartirla. */
   operation: string;
-  kind: "resolve" | "page";
+  kind: "resolve" | "page" | "profile";
   status: AttemptStatus;
   error?: string;
 }
@@ -94,6 +111,26 @@ export interface StoredFollower extends FollowerStub {
   /** Orden de primera aparición (1..n). */
   order: number;
   firstPageNo: number;
+  /**
+   * Estado del enriquecimiento: pending (público, sin consultar), done (perfil consultado),
+   * private (privado: nunca se consulta) o not_found (la fuente no lo encontró).
+   */
+  enrichment: Enrichment;
+  /** Contactos observados en su perfil, ordenados por tipo y valor. */
+  contacts: FollowerContact[];
+}
+
+export type Enrichment = "pending" | "done" | "private" | "not_found";
+
+/** Contacto publicado por un seguidor. Nada se infiere: solo lo que aparece en el perfil. */
+export interface FollowerContact {
+  kind: "email" | "phone";
+  /** Valor normalizado (correo en minúsculas; teléfono en dígitos, con + si es internacional). */
+  value: string;
+  /** Texto tal como apareció. */
+  original: string;
+  /** button: botón de contacto comercial; biography: texto de la biografía. */
+  source: "button" | "biography";
 }
 
 export interface Outcome {
@@ -113,6 +150,8 @@ export interface Outcome {
 export interface Run {
   id: string;
   username: string;
+  /** Consultar el perfil de cada seguidor público seleccionado (mismo presupuesto). */
+  enrichProfiles: boolean;
   /** Seguidores a analizar (objetivo). */
   requested: number;
   /** Tope de intentos (incluye la resolución). */

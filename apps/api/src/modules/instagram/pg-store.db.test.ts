@@ -624,4 +624,141 @@ describePg("PgRunStore contra PostgreSQL 16", () => {
       { verb: "update", table: "instagram_runs", rows: 1 },
     ]);
   }, 60_000);
+
+  describe("enriquecimiento de perfiles (0006)", () => {
+    const enrichTarget: TargetAccount = {
+      ...target,
+      pk: "100000077",
+      username: "cuenta_enriquecida",
+    };
+    const followers = syntheticFollowers(1, 25); // n % 3 === 0 privados
+    const fpk = (n: number) => String(9_000_000 + n);
+    const okProfile = (
+      p: Partial<{
+        businessEmail: string;
+        businessPhone: string;
+        biography: string;
+        isPrivate: boolean;
+      }>,
+    ) => ({
+      status: "ok" as const,
+      isPrivate: p.isPrivate ?? false,
+      businessEmail: p.businessEmail ?? null,
+      businessPhone: p.businessPhone ?? null,
+      biography: p.biography ?? null,
+    });
+    const enrichProvider = () =>
+      new FakeInstagramProvider(
+        enrichTarget,
+        [{ cursor: null, page: { users: followers, nextCursor: null, limited: false } }],
+        undefined,
+        new Map([
+          [
+            fpk(1),
+            okProfile({
+              businessEmail: "Contacto1@Negocio.example",
+              businessPhone: "+57 601 555 0001",
+            }),
+          ],
+          [
+            fpk(2),
+            okProfile({ biography: "Pedidos: ventas2@negocio.example · WhatsApp 300 555 0002" }),
+          ],
+          [fpk(5), okProfile({ isPrivate: true })],
+          [fpk(7), okProfile({ biography: "Hola" })],
+          [fpk(8), okProfile({})],
+          [fpk(10), okProfile({ businessEmail: "info10@negocio.example" })],
+        ]),
+      );
+    const createEnrichRun = async (s: RunStore, id: string, budgetMaxCalls = 20) =>
+      createRun(s, {
+        id,
+        username: enrichTarget.username,
+        requested: 10,
+        budgetMaxCalls,
+        enrichProfiles: true,
+      });
+
+    it("mismo resultado que MemoryRunStore: estados, contactos y procedencia", async () => {
+      const id = randomUUID();
+      const memory = new MemoryRunStore();
+      await createEnrichRun(memory, id);
+      await createEnrichRun(store, id);
+      const outMem = await collect({ provider: enrichProvider(), store: memory }, id);
+      const pgProvider = enrichProvider();
+      const outPg = await collect({ provider: pgProvider, store }, id);
+      expect(outPg).toEqual(outMem);
+      const run = await store.snapshot(id);
+      expect(run).toEqual(memory.snapshot(id));
+      expect(pgProvider.profileCalls()).toEqual([1, 2, 4, 5, 7, 8, 10].map(fpk));
+      expect(run.followers[0]?.contacts.map((c) => [c.kind, c.value, c.source])).toEqual([
+        ["email", "contacto1@negocio.example", "button"],
+        ["phone", "+576015550001", "button"],
+      ]);
+      const rows = await pool.query(
+        "select count(*)::int as n from instagram_follower_contacts where run_id = $1",
+        [id],
+      );
+      expect(rows.rows[0].n).toBe(5);
+    });
+
+    it("fallo dentro de commitProfile tras escribir: vuelve atrás; la recuperación continúa", async () => {
+      let armed = false;
+      const faulty = new PgRunStore(pool, {
+        afterStep: (step, method) => {
+          if (armed && method === "commitProfile" && step === "followers") {
+            armed = false;
+            throw new InjectedFault("fallo tras escribir el estado y los contactos");
+          }
+        },
+      });
+      const provider = enrichProvider();
+      const id = randomUUID();
+      await createEnrichRun(faulty, id);
+      const held = provider.holdProfile(fpk(1));
+      try {
+        const worker = collect({ provider, store: faulty }, id);
+        await within(held.called, 10_000, "consulta del perfil 1");
+        const before = await faulty.snapshot(id);
+        armed = true;
+        held.release();
+        await expect(within(worker, 10_000, "trabajador")).rejects.toBeInstanceOf(InjectedFault);
+        expect(await faulty.snapshot(id)).toEqual(before);
+        const reserved = before.attempts.at(-1);
+        expect(reserved).toMatchObject({ kind: "profile", status: "reserved" });
+
+        expect(await recoverInterrupted(faulty, id, reserved?.id as number)).toBe(1);
+        expect(await collect({ provider, store: faulty }, id)).toMatchObject({
+          stopReason: "target_reached",
+        });
+        const run = await faulty.snapshot(id);
+        expect(run.followers[0]).toMatchObject({ enrichment: "done" });
+        expect(run.followers[0]?.contacts).toHaveLength(2); // sin duplicados
+        expect(provider.profileCalls().filter((p) => p === fpk(1))).toHaveLength(2);
+      } finally {
+        armed = false;
+        held.release();
+      }
+    });
+
+    it("la base rechaza un privado pendiente y una clave de perfil incorrecta", async () => {
+      const id = randomUUID();
+      await createEnrichRun(store, id, 2); // resolución + página, sin perfiles
+      await collect({ provider: enrichProvider(), store }, id);
+      const priv = pool.query(
+        "update instagram_run_followers set enrichment = 'pending' where run_id = $1 and is_private",
+        [id],
+      );
+      await expect(priv).rejects.toMatchObject({
+        code: "23514",
+        constraint: "instagram_run_followers_private_check",
+      });
+      const badKey = pool.query(
+        `insert into instagram_attempts (run_id, attempt_no, kind, profile_pk, operation_key, status, epoch, finished_at)
+         values ($1, 99, 'profile', $2, sha256('P0'::bytea), 'failed', 0, now())`,
+        [id, fpk(1)],
+      );
+      await expect(badKey).rejects.toMatchObject({ code: "23514" });
+    });
+  });
 });

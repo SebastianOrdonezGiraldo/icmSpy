@@ -39,7 +39,7 @@ export function instagramDemoRoutes(ctx: AppContext) {
       }
       const { runId } = await startInstagramCollection(
         { pool: ctx.pool, queue: ctx.queue },
-        { username, requested: DEMO_REQUESTED, budgetMaxCalls: DEMO_BUDGET },
+        { username, requested: DEMO_REQUESTED, budgetMaxCalls: DEMO_BUDGET, enrichProfiles: true },
       );
       return c.json({ runId }, 201);
     })

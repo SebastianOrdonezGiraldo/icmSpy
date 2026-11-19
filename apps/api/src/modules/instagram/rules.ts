@@ -7,9 +7,13 @@
  * resultado a su copia; el adaptador PostgreSQL lo traducirá a INSERT/UPDATE en la misma
  * transacción. Ninguna regla espera a la red ni al proveedor.
  */
+import { extractContacts } from "./contacts";
 import type {
   Attempt,
   Cursor,
+  Enrichment,
+  FollowerContact,
+  FollowerProfile,
   FollowersPage,
   ListState,
   Outcome,
@@ -107,7 +111,11 @@ export type RunHead = Omit<Run, "followers"> & {
   uniqueCount: number;
 };
 
-export type OperationRef = { kind: "resolve" } | { kind: "page"; cursor: Cursor | null };
+export type OperationRef =
+  | { kind: "resolve" }
+  | { kind: "page"; cursor: Cursor | null }
+  /** Consulta del perfil de un seguidor (enriquecimiento). */
+  | { kind: "profile"; pk: string };
 
 /**
  * Permiso para escribir el resultado de un intento. Lo emite la reserva y queda vinculado a
@@ -124,7 +132,8 @@ export interface Lease {
 /** Lo único que necesita el recolector para consultar al proveedor. */
 export type ProviderCall =
   | { kind: "resolve"; username: string }
-  | { kind: "page"; targetPk: string; cursor: Cursor | null };
+  | { kind: "page"; targetPk: string; cursor: Cursor | null }
+  | { kind: "profile"; pk: string };
 
 export type PageSkipReason =
   | "not_resolved"
@@ -143,7 +152,13 @@ export type ReserveSkip =
   /** Un intento de esta solicitud ya falló: la decisión es provider_error con su detalle. */
   | { kind: "request_failed"; attemptId: number; error: string; revision: number }
   /** El job venció antes de conceder la reserva. */
-  | { kind: "expired" };
+  | { kind: "expired" }
+  /** El perfil ya se consultó (o es privado / no encontrado): no se vuelve a pedir. */
+  | "already_enriched"
+  /** El seguidor no está entre los seleccionados de la ejecución. */
+  | "profile_not_selected"
+  /** La ejecución no tiene activado el enriquecimiento. */
+  | "enrichment_disabled";
 
 export type Reservation =
   | { kind: "reserved"; lease: Lease; call: ProviderCall }
@@ -168,6 +183,20 @@ export interface PagePlan {
 /** Lo que el almacén sabe de un seguidor ya guardado en esta ejecución. */
 export type KnownFollower = Pick<StoredFollower, "pk" | "isPrivate">;
 
+/** Seguidor cuyo perfil se va a consultar, tal como lo carga el almacén bajo el bloqueo. */
+export type ProfileTarget = Pick<
+  StoredFollower,
+  "pk" | "username" | "order" | "isPrivate" | "enrichment"
+>;
+
+/** Cambios a aplicar en un seguidor al confirmar la consulta de su perfil. */
+export interface ProfilePlan {
+  pk: string;
+  attemptId: number;
+  enrichment: Exclude<Enrichment, "pending">;
+  contacts: FollowerContact[];
+}
+
 // ── Utilidades ────────────────────────────────────────────────────────────────────────────
 
 export function pageOperation(cursor: Cursor | null): string {
@@ -175,8 +204,14 @@ export function pageOperation(cursor: Cursor | null): string {
   return `page:${JSON.stringify(cursor)}`;
 }
 
+export function profileOperation(pk: string): string {
+  return `profile:${JSON.stringify(pk)}`;
+}
+
 export function operationKey(op: OperationRef): string {
-  return op.kind === "resolve" ? "resolve" : pageOperation(op.cursor);
+  if (op.kind === "resolve") return "resolve";
+  if (op.kind === "profile") return profileOperation(op.pk);
+  return pageOperation(op.cursor);
 }
 
 export function assertPositiveInteger(value: number, name: string) {
@@ -290,6 +325,8 @@ export function applyReserve(
   epoch: number,
   op: OperationRef,
   guard?: RequestGuard,
+  /** Para una consulta de perfil: el seguidor, cargado por el almacén (null si no existe). */
+  follower?: ProfileTarget | null,
 ): Reservation {
   assertEpoch(head, epoch); // la solicitud sigue vigente (otra posterior sube el epoch)
   if (guard) {
@@ -317,7 +354,12 @@ export function applyReserve(
     }
     if (guard.signal?.aborted) return { kind: "skip", reason: { kind: "expired" } };
   }
-  const skip = op.kind === "resolve" ? resolveGate(head) : pageGate(head, op.cursor);
+  const skip =
+    op.kind === "resolve"
+      ? resolveGate(head)
+      : op.kind === "page"
+        ? pageGate(head, op.cursor)
+        : profileGate(head, op, follower ?? null);
   if (skip !== null) return { kind: "skip", reason: skip };
   if (head.attemptCount >= head.budgetMaxCalls) {
     return { kind: "budget", revision: head.revision };
@@ -330,7 +372,9 @@ export function applyReserve(
   const call: ProviderCall =
     op.kind === "resolve"
       ? { kind: "resolve", username: head.username }
-      : { kind: "page", targetPk: (head.target as TargetAccount).pk, cursor: op.cursor };
+      : op.kind === "profile"
+        ? { kind: "profile", pk: op.pk }
+        : { kind: "page", targetPk: (head.target as TargetAccount).pk, cursor: op.cursor };
   const operation: OperationRef = op.kind === "resolve" ? { kind: "resolve" } : { ...op };
   return { kind: "reserved", lease: { runId: head.id, attemptId: id, epoch, operation }, call };
 }
@@ -341,6 +385,46 @@ export function applyResolve(head: RunHead, lease: Lease, target: TargetAccount)
   head.target = target;
   a.status = "succeeded";
   head.revision++;
+}
+
+/** Comprobación de una consulta de perfil: ya hecha, en curso o no aplicable. */
+function profileGate(
+  head: RunHead,
+  op: { kind: "profile"; pk: string },
+  follower: ProfileTarget | null,
+): ReserveSkip | null {
+  if (!head.enrichProfiles) return "enrichment_disabled";
+  if (!follower) return "profile_not_selected";
+  if (follower.enrichment !== "pending") return "already_enriched";
+  const active = inProgressOf(head, profileOperation(op.pk));
+  if (active) return active;
+  if (follower.order > head.requested) return "profile_not_selected";
+  return null;
+}
+
+/**
+ * Confirma la consulta del perfil de un seguidor: guarda sus contactos (botones y biografía) o
+ * lo marca privado / no encontrado, y cierra el intento. No se infiere ningún contacto.
+ */
+export function applyProfile(
+  head: RunHead,
+  lease: Lease,
+  follower: ProfileTarget | null,
+  profile: FollowerProfile,
+): ProfilePlan {
+  const a = assertLease(head, lease, "profile");
+  const pk = (lease.operation as { kind: "profile"; pk: string }).pk;
+  if (!follower || follower.pk !== pk) {
+    throw new LeaseMismatch(`El seguidor ${pk} no pertenece a esta ejecución`);
+  }
+  if (follower.enrichment !== "pending") {
+    throw new LeaseMismatch(`El perfil ${pk} ya no está pendiente`);
+  }
+  const enrichment =
+    profile.status === "not_found" ? "not_found" : profile.isPrivate ? "private" : "done";
+  a.status = "succeeded";
+  head.revision++;
+  return { pk, attemptId: lease.attemptId, enrichment, contacts: extractContacts(profile) };
 }
 
 /** Registra el fallo de un intento vigente. Devuelve la revisión resultante. */
@@ -431,10 +515,14 @@ export function applyPage(
       privacyConflict: false,
       order: head.uniqueCount + inserts.length + 1,
       firstPageNo: pageNo,
+      enrichment: "pending",
+      contacts: [],
     };
     fresh.set(user.pk, stored);
     inserts.push(stored);
   }
+  // Un seguidor privado (en alguna observación) nunca se consulta.
+  for (const f of inserts) if (f.isPrivate) f.enrichment = "private";
   const record: PageRecord = {
     pageNo,
     requestCursor: cursor,

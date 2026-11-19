@@ -46,32 +46,61 @@ async function runDemo(profileUrl: string) {
     username,
     requested: DEMO_REQUESTED,
     budgetMaxCalls: DEMO_BUDGET,
+    enrichProfiles: true,
   });
   await collect({ provider: new SyntheticInstagramProvider(), store }, "demo");
   return buildDemoResult(store.snapshot("demo"));
 }
 
 describe("resultado de la demo", () => {
-  it("ejemplo con contactos ficticios: privados sin enriquecer, públicos con o sin contacto", async () => {
+  it("ejemplo con contactos ficticios: botones y biografía; privados sin consultar", async () => {
     const r = await runDemo(DEMO_EXAMPLES[0].profileUrl);
     expect(r).toMatchObject({
       status: "done",
       stopReason: "target_reached",
-      progress: { collected: 50, requested: 50, attempts: 3, budget: 4 },
-      summary: { rows: 50, privateSkipped: 12, withEmail: 26, withPhone: 13, withoutContact: 12 },
+      // resolución + 2 páginas + 38 perfiles públicos (los 12 privados no se consultan)
+      progress: {
+        collected: 50,
+        requested: 50,
+        profilesDone: 38,
+        profilesToQuery: 38,
+        attempts: 41,
+        budget: DEMO_BUDGET,
+      },
+      summary: {
+        rows: 50,
+        privateSkipped: 12,
+        withEmail: 26,
+        withPhone: 26,
+        withoutContact: 12,
+        pending: 0,
+        notFound: 0,
+      },
     });
     expect(r.rows[0]).toMatchObject({
       position: 1,
       enrichment: "con_contacto",
       email: "contacto1@negocio-demo.example",
+      emailSource: "button",
       phone: "+57 601 555 0001",
+      phoneSource: "button",
     });
-    const priv = r.rows.find((x) => x.isPrivate);
-    expect(priv).toMatchObject({ position: 4, enrichment: "privado", email: null, phone: null });
-    expect(r.rows.every((x) => !x.isPrivate || (x.email === null && x.phone === null))).toBe(true);
+    expect(r.rows[1]).toMatchObject({
+      enrichment: "con_contacto",
+      email: "ventas2@negocio-demo.example",
+      emailSource: "biography",
+      phone: "300 555 0002",
+      phoneSource: "biography",
+    });
+    expect(r.rows[3]).toMatchObject({
+      position: 4,
+      enrichment: "privado",
+      email: null,
+      phone: null,
+    });
   });
 
-  it("ejemplo sin contacto publicado: ningún seguidor tiene correo ni teléfono", async () => {
+  it("ejemplo sin contacto publicado: perfiles consultados, ningún correo ni teléfono", async () => {
     const r = await runDemo(DEMO_EXAMPLES[1].profileUrl);
     expect(r.summary).toEqual({
       rows: 50,
@@ -79,6 +108,8 @@ describe("resultado de la demo", () => {
       withEmail: 0,
       withPhone: 0,
       withoutContact: 38,
+      pending: 0,
+      notFound: 0,
     });
   });
 });

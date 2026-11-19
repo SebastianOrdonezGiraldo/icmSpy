@@ -652,6 +652,9 @@ class BarrierStore implements RunStore {
   failAttempt: RunStore["failAttempt"] = (...a) => this.inner.failAttempt(...a);
   recoverAttempt: RunStore["recoverAttempt"] = (...a) => this.inner.recoverAttempt(...a);
   finish: RunStore["finish"] = (...a) => this.inner.finish(...a);
+  commitProfile: RunStore["commitProfile"] = (...a) => this.inner.commitProfile(...a);
+  nextProfileToEnrich: RunStore["nextProfileToEnrich"] = (...a) =>
+    this.inner.nextProfileToEnrich(...a);
 }
 
 describe("almacén asíncrono", () => {

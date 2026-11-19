@@ -49,7 +49,7 @@ export interface JobQueueDeps {
  */
 export async function startInstagramCollection(
   deps: JobQueueDeps,
-  input: { username: string; requested: number; budgetMaxCalls: number },
+  input: { username: string; requested: number; budgetMaxCalls: number; enrichProfiles?: boolean },
 ): Promise<{ runId: string; jobId: string }> {
   return withTransaction(deps.pool, async (_tx, client) => {
     const runId = randomUUID();
@@ -178,7 +178,7 @@ export async function registerInstagramJobs(ctx: AppContext) {
     QUEUES.instagramCollect,
     createCollectHandler({
       pool: ctx.pool,
-      provider: new SyntheticInstagramProvider(4, 900), // latencia simulada: progreso visible
+      provider: new SyntheticInstagramProvider(4, 250), // latencia simulada: progreso visible
       onResult: (result, data, job) =>
         console.log(
           `[instagram.collect] job=${job.id} run=${data.runId} intento=${job.retryCount}: ${describeJobResult(result)}`,

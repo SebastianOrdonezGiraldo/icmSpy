@@ -50,6 +50,10 @@ class RoutingProvider implements InstagramProvider {
     if (!p) throw new Error("Cuenta desconocida");
     return p.resolveAccount(username);
   }
+  profile(pk: string) {
+    for (const p of this.byPk.values()) return p.profile(pk);
+    throw new Error("Cuenta desconocida");
+  }
   followersPage(pk: string, cursor: Cursor | null) {
     const p = this.byPk.get(pk);
     if (!p) throw new Error("Cuenta desconocida");
@@ -616,6 +620,8 @@ describePg("Instagram en segundo plano (pg-boss + PostgreSQL 16)", () => {
         failAttempt: (...a) => store.failAttempt(...a),
         recoverAttempt: (...a) => store.recoverAttempt(...a),
         finish: (...a) => store.finish(...a),
+        commitProfile: (...a) => store.commitProfile(...a),
+        nextProfileToEnrich: (...a) => store.nextProfileToEnrich(...a),
       };
       try {
         const stale = processCollectJob({ provider, store: paused }, job);
@@ -817,6 +823,8 @@ describePg("Instagram en segundo plano (pg-boss + PostgreSQL 16)", () => {
         failAttempt: (...a) => store.failAttempt(...a),
         recoverAttempt: (...a) => store.recoverAttempt(...a),
         finish: (...a) => store.finish(...a),
+        commitProfile: (...a) => store.commitProfile(...a),
+        nextProfileToEnrich: (...a) => store.nextProfileToEnrich(...a),
       };
       try {
         const d1 = processCollectJob({ provider, store: paused }, job);

@@ -1,6 +1,7 @@
 /** Proveedor falso con respuestas sintéticas (sin red). Registra cada llamada recibida. */
 import type {
   Cursor,
+  FollowerProfile,
   FollowerStub,
   FollowersPage,
   InstagramProvider,
@@ -8,8 +9,9 @@ import type {
 } from "./types";
 
 export interface FakeCall {
-  kind: "resolve" | "page";
+  kind: "resolve" | "page" | "profile";
   cursor?: Cursor | null;
+  pk?: string;
 }
 
 /** Promesa controlable a mano (sin temporizadores). */
@@ -41,8 +43,28 @@ export class FakeInstagramProvider implements InstagramProvider {
     private readonly target: TargetAccount,
     pages: Array<{ cursor: Cursor | null; page: FollowersPage }>,
     private readonly failOn: Set<string> = new Set(),
+    /** Perfiles por ID de seguidor; uno ausente se responde como no encontrado. */
+    private readonly profiles: ReadonlyMap<string, FollowerProfile> = new Map(),
   ) {
     for (const p of pages) this.pages.set(JSON.stringify(p.cursor), p.page);
+  }
+
+  /** Perfil de un seguidor. `failOn` admite la clave `profile:<pk>` para simular un error. */
+  async profile(pk: string): Promise<FollowerProfile> {
+    this.calls.push({ kind: "profile", pk });
+    const key = `profile:${pk}`;
+    await this.waitIfHeld(key);
+    if (this.failOn.has(key)) throw new Error("HTTP 500 simulado");
+    return structuredClone(this.profiles.get(pk) ?? { status: "not_found" });
+  }
+
+  /** Retiene la próxima consulta del perfil `pk` hasta liberarla a mano. */
+  holdProfile(pk: string): HeldResponse {
+    return this.holdKey(`profile:${pk}`);
+  }
+
+  profileCalls(): string[] {
+    return this.calls.filter((c) => c.kind === "profile").map((c) => c.pk as string);
   }
 
   async resolveAccount(username: string): Promise<TargetAccount> {
@@ -134,8 +156,10 @@ export class SyntheticInstagramProvider implements InstagramProvider {
 
   async resolveAccount(username: string): Promise<TargetAccount> {
     await this.latency();
+    // El primer dígito del ID marca las cuentas cuyos seguidores no publican contacto.
+    const marker = username.includes("sin_contacto") ? "7" : "8";
     return {
-      pk: String(800_000_000 + SyntheticInstagramProvider.hash(username)),
+      pk: `${marker}${String(SyntheticInstagramProvider.hash(username)).padStart(9, "0")}`,
       username,
       followerCount: this.pageCount * 25,
       isPrivate: false,
@@ -163,5 +187,38 @@ export class SyntheticInstagramProvider implements InstagramProvider {
       nextCursor: index + 1 < this.pageCount ? `sintetico-${index + 1}` : null,
       limited: false,
     };
+  }
+
+  /**
+   * Perfil FICTICIO de un seguidor (dominio reservado `.example`, teléfonos de la serie 555).
+   * Por posición n: 1 de cada 3 publica correo y teléfono en sus botones; 1 de cada 3 los
+   * escribe en la biografía; el resto no publica contacto. Uno de cada cuatro es privado.
+   */
+  async profile(pk: string): Promise<FollowerProfile> {
+    await this.latency();
+    const n = Number(pk.slice(-4));
+    if (!Number.isInteger(n) || n <= 0) return { status: "not_found" };
+    const n4 = String(n).padStart(4, "0");
+    const base = { status: "ok" as const, isPrivate: n % 4 === 0 };
+    if (pk.startsWith("7")) {
+      return { ...base, businessEmail: null, businessPhone: null, biography: "Cuenta de prueba." };
+    }
+    if (n % 3 === 1) {
+      return {
+        ...base,
+        businessEmail: `contacto${n}@negocio-demo.example`,
+        businessPhone: `+57 601 555 ${n4}`,
+        biography: "Atención con cita previa.",
+      };
+    }
+    if (n % 3 === 2) {
+      return {
+        ...base,
+        businessEmail: null,
+        businessPhone: null,
+        biography: `Pedidos: ventas${n}@negocio-demo.example · WhatsApp 300 555 ${n4}`,
+      };
+    }
+    return { ...base, businessEmail: null, businessPhone: null, biography: "Bienestar y salud." };
   }
 }
