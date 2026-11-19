@@ -7,17 +7,23 @@ import {
   contactPoints,
   type createDb,
   dataProvenance,
+  searchRunMatches,
   searchRuns,
+  siteServices,
   sourceRecords,
   user,
 } from "@icmspy/db";
-import { QUEUES, searchCriteriaSchema } from "@icmspy/shared";
+import { QUEUES, type SearchRunStats, searchCriteriaSchema } from "@icmspy/shared";
 import { count, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createQueue, type JobAttemptInfo, type Queue } from "../lib/queue";
 import { getCompany, listCompanies } from "../modules/companies";
 import { suppress } from "../modules/compliance";
 import { createRepsAdapter } from "../modules/discovery/adapters/reps";
+import {
+  createServiceSourceAdapter,
+  SERVICE_DATASETS,
+} from "../modules/discovery/adapters/reps-services";
 import { createImportDatasetHandler } from "../modules/discovery/jobs/import-dataset";
 
 /** Consulta de la búsqueda fija anterior al buscador: las ejecuciones antiguas siguen funcionando. */
@@ -39,7 +45,15 @@ import {
   toSearchRunDto,
 } from "../modules/search-runs/service";
 import { resetData, setupTestDb, TEST_DATABASE_URL } from "./db";
-import { type FakeSocrataOptions, fakeSocrata, multiSiteRows, repsRow } from "./reps-fixtures";
+import {
+  type FakeSocrataOptions,
+  type FakeSourcesOptions,
+  fakeSocrata,
+  fakeSources,
+  multiSiteRows,
+  repsRow,
+  serviceRow,
+} from "./reps-fixtures";
 
 type Db = ReturnType<typeof createDb>["db"];
 type Pool = ReturnType<typeof createDb>["pool"];
@@ -1008,6 +1022,386 @@ describeDb("búsqueda REPS contra PostgreSQL", () => {
         sources: [{ key: "reps", name: "REPS (datos.gov.co)" }],
         criteria: { legacy: false, keyword: "medico" },
       });
+    });
+  });
+
+  describe("búsqueda por servicios y profesionales", () => {
+    const CUND = SERVICE_DATASETS[0] as (typeof SERVICE_DATASETS)[number];
+    /** Sede de Cundinamarca con los campos de ubicación coherentes. */
+    const cund = (code: string, overrides: Parameters<typeof repsRow>[0] = {}) =>
+      repsRow({
+        codigohabilitacionsede: code,
+        codigoprestador: code.slice(0, 10),
+        municipio_prestador: "25001",
+        departamentoprestadordesc: "Cundinamarca",
+        municipioprestadordesc: "AGUA DE DIOS",
+        municipiosede: "25001",
+        departamentodededesc: "Cundinamarca",
+        municipiosededesc: "AGUA DE DIOS",
+        email_prestador: null,
+        telefonoprestador: null,
+        email_sede: null,
+        t_lefonosede: null,
+        ...overrides,
+      });
+    // A: el nombre no contiene "fisioterapia", pero su sede tiene el servicio.
+    const A = cund("250010010001", {
+      nombreprestador: "CENTRO INTEGRAL ABC SAS",
+      nombresede: "CENTRO INTEGRAL ABC",
+      numeroidentificacion: "900100001",
+      email_prestador: "abc-general@ejemplo.test",
+      email_sede: "abc-sede@ejemplo.test",
+    });
+    // B: solo el nombre.
+    const B = cund("250010010101", {
+      nombreprestador: "FISIOTERAPIA Y SALUD SAS",
+      nombresede: "SEDE PRINCIPAL",
+      numeroidentificacion: "900100002",
+    });
+    // C: profesional independiente con cédula y dos sedes en municipios distintos.
+    const persona = {
+      claseprestador: "Profesional Independiente",
+      tipoid: "CC",
+      numeroidentificacion: "1000000001",
+      nombreprestador: "PERSONA EJEMPLO UNO",
+      codigoprestador: "2512600102",
+      municipio_prestador: "25126",
+      municipioprestadordesc: "CAJICA",
+    };
+    const C1 = cund("251260010201", {
+      ...persona,
+      nombresede: "PERSONA EJEMPLO UNO",
+      municipiosede: "25126",
+      municipiosededesc: "CAJICA",
+    });
+    const C2 = cund("251260010202", {
+      ...persona,
+      nombresede: "PERSONA EJEMPLO UNO",
+      municipiosede: "25269",
+      municipiosededesc: "FACATATIVA",
+    });
+    // D: empresa con sede en Cundinamarca (con el servicio) y otra en Antioquia.
+    const D = cund("250010010301", {
+      nombreprestador: "RED MULTIDEPARTAMENTO SAS",
+      nombresede: "SEDE CUNDINAMARCA",
+      numeroidentificacion: "900100003",
+    });
+    const Dant = repsRow({
+      codigohabilitacionsede: "050010010301",
+      codigoprestador: "0500100103",
+      nombreprestador: "RED MULTIDEPARTAMENTO SAS",
+      numeroidentificacion: "900100003",
+      municipiosede: "05001",
+      departamentodededesc: "Antioquia",
+    });
+    // E: nombre y servicio.
+    const E = cund("250010010401", {
+      nombreprestador: "FISIOTERAPIA INTEGRAL E SAS",
+      nombresede: "SEDE E",
+      numeroidentificacion: "900100004",
+    });
+    const reps = [A, B, C1, C2, D, E];
+    const services = [
+      serviceRow("250010010001"),
+      serviceRow("250010010001", { serv_codigo: "728", serv_nombre: "TERAPIA OCUPACIONAL" }),
+      serviceRow("251260010201", { clase_persona: "NATURAL" }),
+      serviceRow("251260010202", { clase_persona: "NATURAL" }),
+      serviceRow("250010010301"),
+      serviceRow("250010010401"),
+      // Sede que ya no está en el REPS actual.
+      serviceRow("250010099901"),
+    ];
+
+    async function serviceSearch(
+      input: { keyword: string; departmentCode: string; municipalityCode?: string | null },
+      sourcesOptions: Partial<FakeSourcesOptions> = {},
+      opts: { job?: JobAttemptInfo; runId?: string } = {},
+    ) {
+      const api = fakeSources({ reps, repsElsewhere: [Dant], services, ...sourcesOptions });
+      let runId = opts.runId;
+      if (!runId) {
+        const plan = planSearch(searchCriteriaSchema.parse(input));
+        const [created] = await db
+          .insert(searchRuns)
+          .values({ adapter: plan.adapter, query: plan.query })
+          .returning();
+        runId = created?.id as string;
+      }
+      const handler = createImportDatasetHandler({
+        db,
+        pool,
+        getAdapter: (key) =>
+          key === CUND.key
+            ? createServiceSourceAdapter(CUND, { fetch: api.fetch })
+            : createRepsAdapter({ fetch: api.fetch }),
+      });
+      const error = await handler(
+        { adapter: "reps", searchRunId: runId },
+        opts.job ?? attempt(),
+      ).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      const run = await loadRun(db, runId);
+      if (!run) throw new Error("run desaparecido");
+      const results = await getSearchRunResults(db, run.id, 1, 50);
+      return { run: { ...run, stats: run.stats as SearchRunStats }, error, results, api };
+    }
+    const byName = (r: Awaited<ReturnType<typeof serviceSearch>>, name: string) =>
+      r.results.items.find((i) => i.legalName === name);
+
+    it("encuentra por servicio registrado aunque el nombre no contenga la palabra", async () => {
+      const r = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      expect(r.error).toBeNull();
+      expect(r.run.status).toBe("done");
+      expect(
+        r.results.items.map((i) => [i.legalName, i.providerKind, i.matchTypes.join("+")]),
+      ).toEqual([
+        // Primero la evidencia de servicio; la coincidencia solo por nombre, al final.
+        ["CENTRO INTEGRAL ABC SAS", "ips", "service"],
+        ["FISIOTERAPIA INTEGRAL E SAS", "ips", "service+name"],
+        ["PERSONA EJEMPLO UNO", "profesional", "service"],
+        ["RED MULTIDEPARTAMENTO SAS", "ips", "service"],
+        ["FISIOTERAPIA Y SALUD SAS", "ips", "name"],
+      ]);
+      const a = byName(r, "CENTRO INTEGRAL ABC SAS");
+      expect(a?.matchedSites).toEqual([
+        expect.objectContaining({
+          externalId: "250010010001",
+          nameMatch: false,
+          services: [
+            {
+              code: "739",
+              name: "FISIOTERAPIA",
+              kind: "exact",
+              status: "SI",
+              modalities: ["ambulatorio", "domiciliario"],
+              sourceKey: CUND.key,
+              sourceName: CUND.name,
+              sourceCutoffAt: "2022-06-29T17:39:00.000Z",
+              url: expect.stringContaining("serv_codigo=739"),
+            },
+          ],
+        }),
+      ]);
+      // Contactos general y de la sede coincidente.
+      expect(a?.contacts.map((c) => [c.valueNormalized, c.companyWide]).sort()).toEqual([
+        ["abc-general@ejemplo.test", true],
+        ["abc-sede@ejemplo.test", false],
+      ]);
+      // Conteos: relaciones leídas, sedes con servicio, sede ya no vigente y código no pedido.
+      const services = r.run.stats.sources?.find((s) => s.key === CUND.key);
+      expect(services).toMatchObject({
+        role: "services",
+        status: "ok",
+        serviceRelations: 7,
+        sitesWithService: 5,
+        sitesNotInReps: 1,
+        sitesOutsideLocation: 0,
+      });
+      expect(r.run.stats).toMatchObject({
+        recordsRead: 6,
+        recordsMatched: 6,
+        recordsExcluded: 1, // la fila de TERAPIA OCUPACIONAL no se pidió
+        companiesMatched: 5,
+        sitesMatched: 6,
+        companiesByMatch: { service: 4, name: 2 },
+      });
+    });
+
+    it("un profesional con varias sedes es una sola entidad, con cédula y sin NIT", async () => {
+      const r = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      const c = byName(r, "PERSONA EJEMPLO UNO");
+      expect(c?.nit).toBeNull();
+      expect(c?.companyType).toBe("profesional_independiente");
+      expect(c?.matchedSites.map((s) => s.city).sort()).toEqual(["CAJICA", "FACATATIVA"]);
+      const rows = await db
+        .select({
+          nit: companies.nit,
+          idType: companies.identificationType,
+          idNumber: companies.identificationNumber,
+          personKind: companies.personKind,
+          providerClass: companies.providerClass,
+        })
+        .from(companies)
+        .where(eq(companies.legalName, "PERSONA EJEMPLO UNO"));
+      expect(rows).toEqual([
+        {
+          nit: null,
+          idType: "CC",
+          idNumber: "1000000001",
+          // Declarado por la fuente de servicios (clase_persona = NATURAL), no deducido.
+          personKind: "natural",
+          providerClass: "Profesional Independiente",
+        },
+      ]);
+    });
+
+    it("filtra por la sede donde se presta el servicio", async () => {
+      const r = await serviceSearch({
+        keyword: "fisioterapia",
+        departmentCode: "25",
+        municipalityCode: "25126",
+      });
+      expect(r.results.items.map((i) => i.legalName)).toEqual(["PERSONA EJEMPLO UNO"]);
+      expect(r.results.items[0]?.matchedSites.map((s) => s.externalId)).toEqual(["251260010201"]);
+      expect(r.run.stats.sources?.find((s) => s.key === CUND.key)).toMatchObject({
+        sitesWithService: 1,
+        sitesOutsideLocation: 4, // A, D, E y la otra sede de la persona existen, pero en otro municipio
+        sitesNotInReps: 1,
+      });
+    });
+
+    it("una empresa con sedes en varios departamentos aparece una vez, con la sede pertinente", async () => {
+      const r = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      const d = byName(r, "RED MULTIDEPARTAMENTO SAS");
+      expect(d?.matchedSites.map((s) => s.externalId)).toEqual(["250010010301"]);
+      expect(
+        (await db.select({ n: count() }).from(companies).where(eq(companies.nit, "900100003")))[0]
+          ?.n,
+      ).toBe(1);
+    });
+
+    it("una sede con varios servicios relacionados no se duplica; lo relacionado va aparte", async () => {
+      const r = await serviceSearch({ keyword: "rehabilitación", departmentCode: "25" });
+      const a = byName(r, "CENTRO INTEGRAL ABC SAS");
+      expect(a?.matchTypes).toEqual(["related"]);
+      expect(a?.matchedSites).toHaveLength(1);
+      expect(a?.matchedSites[0]?.services.map((s) => [s.code, s.kind])).toEqual([
+        ["728", "related"],
+        ["739", "related"],
+      ]);
+      // "rehabilitación" no está en el nombre de B: no aparece.
+      expect(byName(r, "FISIOTERAPIA Y SALUD SAS")).toBeUndefined();
+      expect(r.run.stats.companiesByMatch).toEqual({ related: 4 });
+    });
+
+    it("un sinónimo documentado confirma el servicio", async () => {
+      const r = await serviceSearch({ keyword: "fisioterapeuta", departmentCode: "25" });
+      const a = byName(r, "CENTRO INTEGRAL ABC SAS");
+      expect(a?.matchTypes).toEqual(["service"]);
+      expect(a?.matchedSites[0]?.services[0]?.kind).toBe("equivalent");
+    });
+
+    it("una palabra fuera del catálogo no consulta servicios ni se vuelve 'todas las IPS'", async () => {
+      const r = await serviceSearch({ keyword: "insumos", departmentCode: "25" });
+      expect(r.api.requests.some((u) => u.pathname.includes("j93s-yemu"))).toBe(false);
+      expect(r.run.status).toBe("done");
+      expect(r.results.total).toBe(0);
+      expect(r.run.stats.sources?.map((s) => s.key)).toEqual(["reps"]);
+    });
+
+    it("una fuente de servicios caída: se reintenta y, en el último intento, el resultado es parcial", async () => {
+      const first = await serviceSearch(
+        { keyword: "fisioterapia", departmentCode: "25" },
+        { failServices: 503 },
+      );
+      expect(first.run.status).toBe("queued");
+      expect(first.run.error).toMatch(/Intento 1 de 3/);
+      expect((await totals()).companies).toBe(0);
+
+      const last = await serviceSearch(
+        { keyword: "fisioterapia", departmentCode: "25" },
+        { failServices: 503 },
+        { runId: first.run.id, job: attempt(2) },
+      );
+      expect(last.run.status).toBe("done");
+      expect(last.run.stats.partial).toBe(true);
+      expect(last.run.stats.sources?.find((s) => s.key === CUND.key)).toMatchObject({
+        status: "failed",
+        error: "La fuente respondió con error HTTP 503: fallo simulado",
+      });
+      // Lo que sí se pudo confirmar (coincidencias por nombre) queda incorporado.
+      expect(last.results.items.map((i) => [i.legalName, i.matchTypes.join("+")])).toEqual([
+        ["FISIOTERAPIA INTEGRAL E SAS", "name"],
+        ["FISIOTERAPIA Y SALUD SAS", "name"],
+      ]);
+    });
+
+    it("repetir encuentra las mismas entidades como existentes, sin duplicar nada", async () => {
+      const first = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      const before = await totals();
+      const servicesBefore = (await db.select({ n: count() }).from(siteServices))[0]?.n;
+      const again = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      expect(again.run.stats).toMatchObject({
+        companiesNew: 0,
+        companiesExisting: 5,
+        recordsNew: 0,
+      });
+      expect(again.results.items.map((i) => i.legalName)).toEqual(
+        first.results.items.map((i) => i.legalName),
+      );
+      expect(again.results.items.every((i) => !i.isNew)).toBe(true);
+      const after = await totals();
+      expect({ ...after, results: 0 }).toEqual({ ...before, results: 0 });
+      expect((await db.select({ n: count() }).from(siteServices))[0]?.n).toBe(servicesBefore);
+      // Cada ejecución conserva sus propias evidencias.
+      const perRun = await db
+        .select({ run: searchRunMatches.searchRunId, n: count() })
+        .from(searchRunMatches)
+        .groupBy(searchRunMatches.searchRunId);
+      expect(perRun.map((p) => p.n)).toEqual([7, 7]);
+    });
+
+    it("una observación con corte anterior no sustituye a la vigente; una más reciente sí", async () => {
+      await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      const older = services.map((s) => ({
+        ...s,
+        habilitado: "NO",
+        fecha_corte_reps: "Fecha corte REPS: Jan 15 2020 10:00AM",
+      }));
+      await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" }, { services: older });
+      const stored = async () =>
+        db
+          .select({ status: siteServices.status, cutoff: siteServices.sourceCutoffAt })
+          .from(siteServices)
+          .innerJoin(companySites, eq(companySites.id, siteServices.siteId))
+          .where(eq(companySites.externalId, "250010010001"));
+      expect((await stored()).map((s) => [s.status, s.cutoff?.toISOString()])).toEqual([
+        ["SI", "2022-06-29T17:39:00.000Z"],
+      ]);
+      const newer = services.map((s) => ({
+        ...s,
+        habilitado: "NO",
+        fecha_corte_reps: "Fecha corte REPS: Mar 1 2024 9:00AM",
+      }));
+      const r = await serviceSearch(
+        { keyword: "fisioterapia", departmentCode: "25" },
+        { services: newer },
+      );
+      expect((await stored()).map((s) => [s.status, s.cutoff?.toISOString()])).toEqual([
+        ["NO", "2024-03-01T14:00:00.000Z"],
+      ]);
+      // El estado publicado se muestra tal cual, con su fecha.
+      expect(byName(r, "CENTRO INTEGRAL ABC SAS")?.matchedSites[0]?.services[0]).toMatchObject({
+        status: "NO",
+        sourceCutoffAt: "2024-03-01T14:00:00.000Z",
+      });
+    });
+
+    it("aplica la supresión a los contactos de lo encontrado por servicio", async () => {
+      await suppress(db, "email", "abc-general@ejemplo.test", "solicitud habeas data");
+      const r = await serviceSearch({ keyword: "fisioterapia", departmentCode: "25" });
+      expect(byName(r, "CENTRO INTEGRAL ABC SAS")?.contacts.map((c) => c.valueNormalized)).toEqual([
+        "abc-sede@ejemplo.test",
+      ]);
+    });
+
+    it("al recargar se recuperan los servicios entendidos, las fuentes y los resultados", async () => {
+      const r = await serviceSearch({ keyword: "Fisioterapia", departmentCode: "25" });
+      const dto = toSearchRunDto((await getSearchRun({ db, queue: noQueue }, r.run.id)) as never);
+      expect(dto.criteria).toMatchObject({
+        keyword: "fisioterapia",
+        services: [{ code: "739", name: "FISIOTERAPIA", kind: "exact" }],
+      });
+      expect(dto.sources.map((s) => s.key)).toEqual(["reps", CUND.key]);
+      const filtered = await getSearchRunResults(db, r.run.id, 1, 50, { kind: "profesional" });
+      expect(filtered.items.map((i) => i.legalName)).toEqual(["PERSONA EJEMPLO UNO"]);
+      const byNameOnly = await getSearchRunResults(db, r.run.id, 1, 50, { match: "name" });
+      expect(byNameOnly.items.map((i) => i.legalName)).toEqual([
+        "FISIOTERAPIA INTEGRAL E SAS",
+        "FISIOTERAPIA Y SALUD SAS",
+      ]);
     });
   });
 

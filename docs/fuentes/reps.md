@@ -130,8 +130,9 @@ filtrar por código DANE.
 - La palabra clave se aplica en el worker a `nombreprestador` y `nombresede` (SoQL no ignora
   tildes). Se leen todas las páginas del filtro geográfico; `recordsRead` = leídos,
   `recordsMatched` = con la palabra clave, `recordsNotMatching` = el resto.
-- Solo la clase IPS. Profesionales independientes (personas naturales), transporte de pacientes y
-  "objeto social diferente" no se incluyen.
+- Desde la búsqueda por servicios (consulta v3) se leen las cuatro clases: IPS, profesionales
+  independientes, objeto social diferente y transporte de pacientes (`claseprestador in (…)`); las
+  búsquedas anteriores (v2) solo leían IPS. Ver `servicios.md`.
 - Volumen por departamento observado (clase IPS): Quindío 233 sedes, Risaralda 374, Caquetá 113.
 
 ### Búsquedas reales verificadas (2026-11-13, base de desarrollo, API + worker)

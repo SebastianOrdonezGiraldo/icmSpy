@@ -1,6 +1,17 @@
 import { z } from "zod";
 
-export const COMPANY_TYPES = ["ips", "distribuidor", "drogueria", "laboratorio", "otro"] as const;
+/**
+ * Tipo de actividad comercial de la entidad. "profesional_independiente" es una
+ * persona registrada en REPS con esa clase de prestador: no es una IPS.
+ */
+export const COMPANY_TYPES = [
+  "ips",
+  "distribuidor",
+  "drogueria",
+  "laboratorio",
+  "otro",
+  "profesional_independiente",
+] as const;
 export type CompanyType = (typeof COMPANY_TYPES)[number];
 
 export const CONTACT_KINDS = [

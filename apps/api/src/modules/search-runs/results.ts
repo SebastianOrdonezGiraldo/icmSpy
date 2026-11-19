@@ -5,16 +5,41 @@ import {
   contactPoints,
   type DbExecutor,
   dataProvenance,
+  searchRunMatches,
   searchRunResults,
+  siteServices,
   sources,
 } from "@icmspy/db";
-import type { SearchResultItem, SearchRunResultsResponse } from "@icmspy/shared";
-import { and, asc, countDistinct, eq, inArray, sql } from "drizzle-orm";
+import type {
+  MatchType,
+  ProviderKind,
+  SearchResultItem,
+  SearchRunResultsResponse,
+  ServiceMatchKind,
+} from "@icmspy/shared";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
+
+export interface ResultFilters {
+  /** Tipo de entidad. */
+  kind?: ProviderKind;
+  /** Entidades con al menos una evidencia de este tipo. */
+  match?: MatchType;
+}
+
+function providerKindOf(companyType: string): ProviderKind {
+  if (companyType === "ips") return "ips";
+  if (companyType === "profesional_independiente") return "profesional";
+  return "otro";
+}
+
+/** Primero la evidencia directa (servicio), luego la relacionada y por último el nombre. */
+const MATCH_RANK: Record<MatchType, number> = { service: 0, related: 1, name: 2 };
 
 /**
- * Empresas que encontró una ejecución, paginadas por empresa. Sale de
- * `search_run_results`, no del catálogo: incluye las empresas que ya existían
- * y nada que la ejecución no haya encontrado.
+ * Entidades que encontró una ejecución, paginadas por entidad. Sale de
+ * `search_run_results` y `search_run_matches`, no del catálogo: incluye las que
+ * ya existían y nada que la ejecución no haya encontrado. Una entidad aparece
+ * una sola vez con todas sus evidencias, de todas las fuentes.
  *
  * Contactos: los generales de la empresa (publicados con ámbito "company" en la
  * procedencia, aunque también estén vinculados a alguna sede) y los de las
@@ -26,33 +51,64 @@ export async function getSearchRunResults(
   searchRunId: string,
   page: number,
   pageSize: number,
+  filters: ResultFilters = {},
 ): Promise<SearchRunResultsResponse> {
   const byRun = eq(searchRunResults.searchRunId, searchRunId);
-  const [totals] = await db
-    .select({ total: countDistinct(searchRunResults.companyId) })
-    .from(searchRunResults)
-    .where(byRun);
-  const total = totals?.total ?? 0;
-  if (total === 0) return { items: [], page, pageSize, total };
 
-  const rows = await db
+  // Todas las entidades de la ejecución con sus motivos (miles como mucho): se
+  // filtran y ordenan aquí para que el total, el orden y la página coincidan.
+  const entities = await db
     .select({
       companyId: companies.id,
       legalName: companies.legalName,
       nit: companies.nit,
       city: companies.city,
       department: companies.department,
+      companyType: companies.companyType,
+      providerClass: companies.providerClass,
       isNew: sql<boolean>`bool_or(${searchRunResults.companyIsNew})`,
-      sourceKeys: sql<string[]>`array_agg(distinct ${sources.key} order by ${sources.key})`,
     })
     .from(searchRunResults)
     .innerJoin(companies, eq(companies.id, searchRunResults.companyId))
-    .innerJoin(sources, eq(sources.id, searchRunResults.sourceId))
     .where(byRun)
-    .groupBy(companies.id)
-    .orderBy(asc(companies.legalName), asc(companies.id))
-    .limit(pageSize)
-    .offset((page - 1) * pageSize);
+    .groupBy(companies.id);
+  const matchRows = await db
+    .selectDistinct({
+      companyId: searchRunMatches.companyId,
+      matchType: searchRunMatches.matchType,
+      sourceKey: sources.key,
+    })
+    .from(searchRunMatches)
+    .innerJoin(sources, eq(sources.id, searchRunMatches.sourceId))
+    .where(eq(searchRunMatches.searchRunId, searchRunId));
+  const typesOf = new Map<string, Set<MatchType>>();
+  const sourcesOf = new Map<string, Set<string>>();
+  for (const m of matchRows) {
+    typesOf.set(m.companyId, (typesOf.get(m.companyId) ?? new Set()).add(m.matchType as MatchType));
+    sourcesOf.set(m.companyId, (sourcesOf.get(m.companyId) ?? new Set()).add(m.sourceKey));
+  }
+  const rank = (id: string) =>
+    Math.min(...[...(typesOf.get(id) ?? [])].map((t) => MATCH_RANK[t]), 3);
+
+  const filtered = entities
+    .map((e) => ({
+      ...e,
+      providerKind: providerKindOf(e.companyType),
+      matchTypes: [...(typesOf.get(e.companyId) ?? [])].sort(
+        (a, b) => MATCH_RANK[a] - MATCH_RANK[b],
+      ),
+    }))
+    .filter((e) => !filters.kind || e.providerKind === filters.kind)
+    .filter((e) => !filters.match || e.matchTypes.includes(filters.match))
+    .sort(
+      (a, b) =>
+        rank(a.companyId) - rank(b.companyId) ||
+        a.legalName.localeCompare(b.legalName, "es") ||
+        a.companyId.localeCompare(b.companyId),
+    );
+  const total = filtered.length;
+  const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  if (rows.length === 0) return { items: [], page, pageSize, total };
   const companyIds = rows.map((r) => r.companyId);
 
   const sites = await db
@@ -69,6 +125,39 @@ export async function getSearchRunResults(
     .innerJoin(companySites, eq(companySites.id, searchRunResults.siteId))
     .where(and(byRun, inArray(searchRunResults.companyId, companyIds)))
     .orderBy(asc(companySites.city), asc(companySites.name), asc(companySites.externalId));
+
+  // Evidencias por sede: nombre y servicios (con la observación vigente del servicio).
+  const siteEvidence = await db
+    .select({
+      siteId: searchRunMatches.siteId,
+      matchType: searchRunMatches.matchType,
+      conceptKind: searchRunMatches.conceptKind,
+      serviceCode: searchRunMatches.serviceCode,
+      sourceKey: sources.key,
+      sourceName: sources.name,
+      serviceName: siteServices.serviceName,
+      status: siteServices.status,
+      modalities: siteServices.modalities,
+      sourceCutoffAt: siteServices.sourceCutoffAt,
+      url: siteServices.sourceUrl,
+    })
+    .from(searchRunMatches)
+    .innerJoin(sources, eq(sources.id, searchRunMatches.sourceId))
+    .leftJoin(
+      siteServices,
+      and(
+        eq(siteServices.siteId, searchRunMatches.siteId),
+        eq(siteServices.sourceId, searchRunMatches.sourceId),
+        eq(siteServices.serviceCode, searchRunMatches.serviceCode),
+      ),
+    )
+    .where(
+      and(
+        eq(searchRunMatches.searchRunId, searchRunId),
+        inArray(searchRunMatches.companyId, companyIds),
+      ),
+    )
+    .orderBy(asc(searchRunMatches.serviceCode));
 
   const points = await db
     .select({
@@ -125,9 +214,37 @@ export async function getSearchRunResults(
     const ownMatched = sites.filter((s) => s.companyId === r.companyId);
     const ownMatchedIds = new Set(ownMatched.map((s) => s.id));
     return {
-      ...r,
+      companyId: r.companyId,
+      legalName: r.legalName,
+      nit: r.nit,
+      city: r.city,
+      department: r.department,
+      companyType: r.companyType,
+      providerClass: r.providerClass,
+      providerKind: r.providerKind,
+      matchTypes: r.matchTypes,
       isNew: Boolean(r.isNew),
-      matchedSites: ownMatched.map(({ companyId: _c, ...s }) => s),
+      sourceKeys: [...(sourcesOf.get(r.companyId) ?? [])].sort(),
+      matchedSites: ownMatched.map(({ companyId: _c, ...s }) => {
+        const ev = siteEvidence.filter((e) => e.siteId === s.id);
+        return {
+          ...s,
+          nameMatch: ev.some((e) => e.matchType === "name"),
+          services: ev
+            .filter((e) => e.matchType !== "name" && e.serviceCode)
+            .map((e) => ({
+              code: e.serviceCode as string,
+              name: e.serviceName ?? (e.serviceCode as string),
+              kind: (e.conceptKind ?? "related") as ServiceMatchKind,
+              status: e.status,
+              modalities: e.modalities ?? [],
+              sourceKey: e.sourceKey,
+              sourceName: e.sourceName,
+              sourceCutoffAt: e.sourceCutoffAt?.toISOString() ?? null,
+              url: e.url,
+            })),
+        };
+      }),
       contacts: points
         .filter((p) => p.companyId === r.companyId)
         .map(({ companyId: _c, ...p }) => ({

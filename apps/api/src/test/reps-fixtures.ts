@@ -117,3 +117,95 @@ export function fakeSocrata(options: FakeSocrataOptions) {
   };
   return { fetch: fetchImpl as typeof fetch, requests };
 }
+
+// --- Servicios habilitados (estructura de j93s-yemu, MinSalud) ---------------
+
+export const SERVICES_CUTOFF = "Fecha corte REPS: Jun 29 2022 12:39PM";
+
+/** Columnas que declara el portal para el conjunto de servicios. */
+export const SERVICE_METADATA = {
+  rowsUpdatedAt: 1656945600,
+  columns: [
+    "codigo_habilitacion",
+    "numero_sede",
+    "serv_codigo",
+    "serv_nombre",
+    "habilitado",
+    "clase_persona",
+    "fecha_corte_reps",
+    "ambulatorio",
+    "hospitalario",
+    "unidad_movil",
+    "domiciliario",
+    "otras_extramural",
+  ].map((fieldName) => ({ fieldName, dataTypeName: "text" })),
+};
+
+/** Fila de servicio habilitado: código de habilitación de 10 dígitos + número de sede. */
+export function serviceRow(
+  siteCode: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    codigo_habilitacion: siteCode.slice(0, 10),
+    numero_sede: String(Number(siteCode.slice(10))),
+    serv_codigo: "739",
+    serv_nombre: "FISIOTERAPIA",
+    habilitado: "SI",
+    clase_persona: "JURIDICO",
+    fecha_corte_reps: SERVICES_CUTOFF,
+    ambulatorio: "SI",
+    hospitalario: "NO",
+    unidad_movil: "NO",
+    domiciliario: "SI",
+    otras_extramural: "NO",
+    ...overrides,
+  };
+}
+
+export interface FakeSourcesOptions {
+  /** Sedes de REPS que la consulta geográfica devuelve. */
+  reps: Record<string, unknown>[];
+  /** Sedes de REPS que existen fuera del lugar consultado (para la consulta por código). */
+  repsElsewhere?: Record<string, unknown>[];
+  /** Filas del conjunto de servicios. */
+  services?: Record<string, unknown>[];
+  /** Estado HTTP forzado para cualquier petición al conjunto de servicios. */
+  failServices?: number;
+}
+
+/**
+ * Portal simulado con REPS y un conjunto de servicios. No aplica $where salvo
+ * en la consulta de sedes por código (así se prueban los descartes del worker).
+ */
+export function fakeSources(options: FakeSourcesOptions) {
+  const requests: URL[] = [];
+  const page = (rows: Record<string, unknown>[], url: URL) => {
+    if (url.searchParams.get("$select")?.startsWith("count(")) {
+      return Response.json([{ total: String(rows.length) }]);
+    }
+    const offset = Number(url.searchParams.get("$offset") ?? 0);
+    const limit = Number(url.searchParams.get("$limit") ?? 1000);
+    return Response.json(rows.slice(offset, offset + limit));
+  };
+  const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+    const url = new URL(typeof input === "string" ? input : input.toString());
+    requests.push(url);
+    const isServices = url.pathname.includes("j93s-yemu");
+    if (isServices && options.failServices) {
+      return Response.json({ message: "fallo simulado" }, { status: options.failServices });
+    }
+    if (url.pathname.startsWith("/api/views/")) {
+      return Response.json(isServices ? SERVICE_METADATA : REPS_METADATA);
+    }
+    if (isServices) return page(options.services ?? [], url);
+    const where = url.searchParams.get("$where") ?? "";
+    if (where.startsWith("codigohabilitacionsede in")) {
+      const codes = new Set([...where.matchAll(/'(\d+)'/g)].map((m) => m[1]));
+      const all = [...options.reps, ...(options.repsElsewhere ?? [])];
+      return Response.json(all.filter((r) => codes.has(String(r.codigohabilitacionsede))));
+    }
+    return page(options.reps, url);
+  };
+  return { fetch: fetchImpl as typeof fetch, requests };
+}

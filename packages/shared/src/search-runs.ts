@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getDepartment, getMunicipality, municipalityBelongsTo } from "./geo";
+import type { ResolvedService, ServiceMatchKind } from "./services/concepts";
 
 // --- Palabra clave -----------------------------------------------------------
 //
@@ -122,6 +123,11 @@ export interface SearchCriteriaView {
   label: string;
   /** Ejecución de la búsqueda fija "IPS y clínicas de Quindío", anterior al buscador. */
   legacy: boolean;
+  /**
+   * Servicios del catálogo oficial que el sistema asoció a la palabra, con el
+   * tipo de relación. Vacío si la palabra no corresponde a ningún servicio.
+   */
+  services: ResolvedService[];
 }
 
 export function describeCriteria(c: {
@@ -129,6 +135,7 @@ export function describeCriteria(c: {
   departmentCode: string;
   municipalityCode: string | null;
   legacy?: boolean;
+  services?: ResolvedService[];
 }): SearchCriteriaView {
   const department = getDepartment(c.departmentCode)?.name ?? c.departmentCode;
   const municipality = c.municipalityCode
@@ -146,6 +153,7 @@ export function describeCriteria(c: {
       ? `IPS y clínicas de ${place} (búsqueda fija anterior)`
       : `“${keyword}” en ${place}`,
     legacy: Boolean(c.legacy),
+    services: c.services ?? [],
   };
 }
 
@@ -155,9 +163,25 @@ export const searchRunListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(5),
 });
 
+/** Tipo de entidad en los resultados. */
+export const PROVIDER_KINDS = ["ips", "profesional", "otro"] as const;
+export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+/**
+ * Por qué una entidad está en los resultados:
+ * - service: una fuente oficial relaciona una de sus sedes con un servicio
+ *   exacto, equivalente o cuyo nombre oficial empieza por la palabra.
+ * - related: solo con un servicio de un concepto relacionado.
+ * - name: el nombre del prestador o de la sede contiene las palabras.
+ */
+export const MATCH_TYPES = ["service", "related", "name"] as const;
+export type MatchType = (typeof MATCH_TYPES)[number];
+
 export const searchRunResultsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
+  kind: z.enum(PROVIDER_KINDS).optional(),
+  match: z.enum(MATCH_TYPES).optional(),
 });
 
 export const SEARCH_RUN_STATUSES = ["queued", "running", "done", "failed"] as const;
@@ -167,6 +191,19 @@ export type SearchRunStatus = (typeof SEARCH_RUN_STATUSES)[number];
 export interface SearchRunSourceStats {
   key: string;
   name: string;
+  /** providers: prestadores y sedes; services: relación sede → servicio. */
+  role?: "providers" | "services";
+  /** ok: consultada completa; failed: no se pudo consultar (resultado parcial). */
+  status?: "ok" | "failed";
+  error?: string | null;
+  /** Relaciones sede → servicio leídas (fuentes de servicios). */
+  serviceRelations?: number;
+  /** Sedes con el servicio que existen en el REPS actual y están en el lugar buscado. */
+  sitesWithService?: number;
+  /** Sedes con el servicio que ya no aparecen en el REPS actual (no se incorporan). */
+  sitesNotInReps?: number;
+  /** Sedes con el servicio fuera del municipio pedido. */
+  sitesOutsideLocation?: number;
   /** Registros que la fuente dijo tener para el filtro geográfico y de clase. */
   recordsExpected?: number;
   /** Registros leídos de la fuente. */
@@ -232,6 +269,12 @@ export interface SearchRunStats {
   sourceUrl?: string;
   /** Detalle por fuente consultada. */
   sources?: SearchRunSourceStats[];
+  /** Alguna fuente no se pudo consultar: los resultados son parciales. */
+  partial?: boolean;
+  /** No hay fuente de servicios con cobertura para el lugar buscado. */
+  noServiceSourceForLocation?: boolean;
+  /** Empresas por motivo de inclusión (una empresa puede contar en varios). */
+  companiesByMatch?: Partial<Record<MatchType, number>>;
 }
 
 export interface SearchRunDto {
@@ -264,7 +307,14 @@ export interface CreateSearchRunResponse {
 export interface SearchResultItem {
   companyId: string;
   legalName: string;
+  /** Solo si la fuente declara que la identificación es un NIT. */
   nit: string | null;
+  companyType: string;
+  /** Clase de prestador tal como la publica la fuente. */
+  providerClass: string | null;
+  providerKind: ProviderKind;
+  /** Motivos de inclusión de la entidad en esta búsqueda. */
+  matchTypes: MatchType[];
   city: string | null;
   department: string | null;
   /** La empresa se creó en esta ejecución. */
@@ -278,6 +328,21 @@ export interface SearchResultItem {
     address: string | null;
     city: string | null;
     department: string | null;
+    /** El nombre de la sede o del prestador contiene las palabras. */
+    nameMatch: boolean;
+    /** Servicios de la búsqueda que una fuente oficial relaciona con esta sede. */
+    services: {
+      code: string;
+      name: string;
+      kind: ServiceMatchKind;
+      /** Estado publicado por la fuente (p. ej. "SI" en habilitado). */
+      status: string | null;
+      modalities: string[];
+      sourceKey: string;
+      sourceName: string;
+      sourceCutoffAt: string | null;
+      url: string | null;
+    }[];
   }[];
   /** Contactos de la empresa (de las sedes que coincidieron o de la empresa). */
   contacts: {

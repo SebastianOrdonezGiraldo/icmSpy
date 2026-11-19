@@ -4,10 +4,13 @@ import {
   DIVIPOLA,
   getDepartment,
   KEYWORD_MAX_LENGTH,
+  type MatchType,
+  type ProviderKind,
   type SearchCriteria,
   type SearchResultItem,
   type SearchRunDto,
   type SearchRunResultsResponse,
+  type ServiceMatchKind,
   searchCriteriaSchema,
 } from "@icmspy/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +21,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiGet, apiPost } from "@/lib/api";
-import { formatDate, formatDateTime, formatPhone, SOURCE_LABELS } from "@/lib/format";
+import { formatDate, formatDateTime, formatPhone } from "@/lib/format";
 
 /** Pasado este tiempo en cola sin empezar, se avisa que el proceso de fondo puede no estar activo. */
 const STALE_QUEUE_MS = 60_000;
@@ -167,9 +170,10 @@ function SearchForm({
       <div>
         <h2 className="font-medium">Buscar empresas</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Consulta automáticamente las fuentes oficiales disponibles y trae las empresas cuyo nombre
-          o el de alguna de sus sedes contiene todas las palabras escritas (sin importar mayúsculas
-          ni tildes), con sedes en el lugar elegido.
+          Consulta automáticamente las fuentes oficiales disponibles y trae IPS, profesionales
+          independientes y otros prestadores con sedes en el lugar elegido que tienen registrado un
+          servicio que corresponde a la palabra (catálogo oficial de servicios de REPS) o cuyo
+          nombre la contiene. Cada resultado indica por qué aparece.
         </p>
       </div>
       <form onSubmit={submit} className="grid gap-3 md:grid-cols-[2fr_1.5fr_1.5fr_auto]" noValidate>
@@ -352,15 +356,23 @@ function RunStatus({ run }: { run: SearchRunDto }) {
         Terminada el {formatDateTime(run.finishedAt)}:{" "}
         <strong>
           {n(s.companiesMatched)}{" "}
-          {s.companiesMatched === 1 ? "empresa encontrada" : "empresas encontradas"}
+          {s.companiesMatched === 1 ? "prestador encontrado" : "prestadores encontrados"}
         </strong>{" "}
-        ({n(s.companiesNew)} nuevas, {n(s.companiesExisting)} ya estaban en el catálogo) con{" "}
-        {n(s.sitesMatched)} sedes coincidentes.
+        ({n(s.companiesNew)} nuevos, {n(s.companiesExisting)} ya estaban en el catálogo) con{" "}
+        {n(s.sitesMatched)} sedes pertinentes.
+        {s.partial && <span className="text-amber-700"> Resultado parcial.</span>}
       </p>
       <ul className="mt-1 list-inside list-disc text-muted-foreground">
+        {s.companiesByMatch && (
+          <li>
+            Por servicio registrado: {n(s.companiesByMatch.service)}; por actividad relacionada:{" "}
+            {n(s.companiesByMatch.related)}; por nombre: {n(s.companiesByMatch.name)} (un prestador
+            puede tener varios motivos).
+          </li>
+        )}
         <li>
-          {n(s.recordsRead)} registros leídos en las fuentes para el lugar elegido;{" "}
-          {n(s.recordsMatched)} contienen la palabra clave.
+          {n(s.recordsRead)} sedes leídas en REPS para el lugar elegido; {n(s.recordsMatched)} con
+          alguna evidencia.
         </li>
         <li>
           Contactos: {n(s.contactsNew)} nuevos y {n(s.contactsExisting)} ya registrados.
@@ -374,21 +386,101 @@ function RunStatus({ run }: { run: SearchRunDto }) {
   );
 }
 
+const KIND_LABEL: Record<ServiceMatchKind, string> = {
+  exact: "nombre oficial",
+  equivalent: "equivalencia",
+  catalog: "el nombre del servicio empieza por la palabra",
+  related: "concepto relacionado",
+};
+
+const PROVIDER_KIND_LABEL: Record<ProviderKind, string> = {
+  ips: "IPS",
+  profesional: "Profesional independiente",
+  otro: "Otro prestador",
+};
+
+const MATCH_LABEL: Record<MatchType, string> = {
+  service: "Servicio registrado",
+  related: "Actividad relacionada",
+  name: "Coincidencia por nombre",
+};
+
 function Coverage({ run }: { run: SearchRunDto }) {
-  const perSource = run.stats.sources ?? [];
+  const s = run.stats;
+  const perSource = s.sources ?? [];
+  const services = run.criteria.services;
+  const confirmed = services.filter((x) => x.kind !== "related");
+  const related = services.filter((x) => x.kind === "related");
+  const place = run.criteria.municipalityName ?? run.criteria.departmentName;
   return (
-    <div className="space-y-1 text-xs text-muted-foreground">
+    <div className="space-y-2 text-xs text-muted-foreground">
+      {!run.criteria.legacy && run.criteria.keyword && (
+        <div className="space-y-1">
+          <p className="font-medium text-foreground">Qué entendió el sistema</p>
+          {confirmed.length > 0 ? (
+            <p>
+              Servicios del catálogo oficial de REPS:{" "}
+              {confirmed.map((x, i) => (
+                <span key={x.code} title={x.reason}>
+                  {i > 0 && "; "}
+                  {x.code} {x.name} ({KIND_LABEL[x.kind]})
+                </span>
+              ))}
+              .
+            </p>
+          ) : (
+            <p>
+              “{run.criteria.keyword}” no corresponde a ningún servicio del catálogo oficial de
+              REPS: solo se busca en los nombres de prestadores y sedes.
+            </p>
+          )}
+          {related.length > 0 && (
+            <p>
+              Conceptos relacionados (se muestran aparte y no confirman lo buscado):{" "}
+              {related.map((x) => `${x.code} ${x.name}`).join("; ")}. {related[0]?.reason}.
+            </p>
+          )}
+          <p>Además se buscan las palabras en los nombres de prestadores y sedes.</p>
+        </div>
+      )}
+      {s.noServiceSourceForLocation && (
+        <p className="text-amber-700">
+          No hay una fuente abierta con los servicios habilitados por sede para {place}: en este
+          lugar los resultados solo pueden venir de coincidencias por nombre.
+        </p>
+      )}
+      {s.partial && (
+        <p className="text-amber-700">
+          Resultado parcial: alguna fuente no se pudo consultar (ver detalle abajo). Lo demás sí se
+          incorporó.
+        </p>
+      )}
       {run.sources.map((source) => {
-        const st = perSource.find((p) => p.key === source.key) ?? run.stats;
+        const st =
+          perSource.find((p) => p.key === source.key) ?? (perSource.length ? undefined : s);
         return (
           <p key={source.key}>
             <span className="font-medium">Fuente: {source.name}.</span> {source.coverage}{" "}
-            {(st.sourceCutoffAt || st.sourceCutoffRaw) &&
-              `Corte de los datos: ${st.sourceCutoffAt ? formatDate(st.sourceCutoffAt) : st.sourceCutoffRaw}`}
-            {st.sourceUpdatedAt && `, publicados el ${formatDate(st.sourceUpdatedAt)}`}
-            {(st.sourceCutoffAt || st.sourceUpdatedAt) &&
-              ". Es una publicación periódica: no confirma que la habilitación siga vigente hoy. "}
-            {st.sourceUrl && (
+            {st && "status" in st && st.status === "failed" && (
+              <span className="text-destructive">No se pudo consultar: {st.error}. </span>
+            )}
+            {st && "role" in st && st.role === "services" && st.status === "ok" && (
+              <>
+                {n(st.serviceRelations)} relaciones sede–servicio leídas; {n(st.sitesWithService)}{" "}
+                sedes con el servicio en el lugar buscado
+                {(st.sitesOutsideLocation ?? 0) > 0 &&
+                  `, ${n(st.sitesOutsideLocation)} fuera de él`}
+                {(st.sitesNotInReps ?? 0) > 0 &&
+                  `, ${n(st.sitesNotInReps)} que ya no figuran en el REPS actual (no se incorporan)`}
+                .{" "}
+              </>
+            )}
+            {st?.sourceCutoffAt || st?.sourceCutoffRaw
+              ? `Corte de los datos: ${st.sourceCutoffAt ? formatDate(st.sourceCutoffAt) : st.sourceCutoffRaw}. `
+              : ""}
+            {st?.sourceUpdatedAt &&
+              `Publicados en el portal el ${formatDate(st.sourceUpdatedAt)}. `}
+            {st?.sourceUrl && (
               <a href={st.sourceUrl} target="_blank" rel="noreferrer" className="underline">
                 Ver fuente
               </a>
@@ -397,22 +489,26 @@ function Coverage({ run }: { run: SearchRunDto }) {
         );
       })}
       <p>
-        La búsqueda compara palabras con los nombres publicados; no sabe a qué se dedica cada
-        empresa. INVIMA y otras fuentes no se consultan todavía.
+        Las publicaciones son periódicas: no confirman que una habilitación siga vigente hoy. Solo
+        se consultan las fuentes listadas; INVIMA, sitios web y directorios todavía no.
       </p>
     </div>
   );
 }
 
 function Results({ run }: { run: SearchRunDto }) {
-  // RunView se monta con key = id de la ejecución: la página vuelve a 1 al cambiar de búsqueda.
+  // RunView se monta con key = id de la ejecución: página y filtros vuelven al inicio al cambiar de búsqueda.
   const [page, setPage] = useState(1);
+  const [kind, setKind] = useState<ProviderKind | "">("");
+  const [match, setMatch] = useState<MatchType | "">("");
   const results = useQuery({
-    queryKey: ["search-run-results", run.id, page],
+    queryKey: ["search-run-results", run.id, page, kind, match],
     queryFn: () =>
       apiGet<SearchRunResultsResponse>(`/search-runs/${run.id}/results`, {
         page,
         pageSize: PAGE_SIZE,
+        kind: kind || undefined,
+        match: match || undefined,
       }),
     // Mientras carga otra página de ESTA búsqueda se mantiene la anterior; nunca la de otra.
     placeholderData: (previous, previousQuery) =>
@@ -420,6 +516,40 @@ function Results({ run }: { run: SearchRunDto }) {
   });
   const data = results.data;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+  const filtered = Boolean(kind || match);
+
+  const filters = (
+    <div className="flex flex-wrap items-center gap-3 text-sm">
+      <select
+        aria-label="Tipo de prestador"
+        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+        value={kind}
+        onChange={(e) => {
+          setKind(e.target.value as ProviderKind | "");
+          setPage(1);
+        }}
+      >
+        <option value="">Todos los prestadores</option>
+        <option value="ips">IPS</option>
+        <option value="profesional">Profesionales independientes</option>
+        <option value="otro">Otros prestadores</option>
+      </select>
+      <select
+        aria-label="Motivo de inclusión"
+        className="h-8 rounded-md border border-input bg-background px-2 text-sm"
+        value={match}
+        onChange={(e) => {
+          setMatch(e.target.value as MatchType | "");
+          setPage(1);
+        }}
+      >
+        <option value="">Todos los motivos</option>
+        <option value="service">Servicio registrado</option>
+        <option value="related">Actividad relacionada</option>
+        <option value="name">Coincidencia por nombre</option>
+      </select>
+    </div>
+  );
 
   if (results.isError) {
     return <p className="text-sm text-destructive">No se pudieron cargar los resultados.</p>;
@@ -427,20 +557,23 @@ function Results({ run }: { run: SearchRunDto }) {
   if (!data) return <p className="text-sm text-muted-foreground">Cargando resultados…</p>;
   if (data.total === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Sin resultados: ninguna institución con sede en{" "}
-        {run.criteria.municipalityName ?? run.criteria.departmentName} tiene en su nombre todas las
-        palabras “{run.criteria.keyword}”. Prueba con menos palabras o con una raíz más corta (por
-        ejemplo, “odonto”).
-      </p>
+      <div className="space-y-2">
+        {filtered && filters}
+        <p className="text-sm text-muted-foreground">
+          {filtered
+            ? "Sin resultados con estos filtros."
+            : `Sin resultados en ${run.criteria.municipalityName ?? run.criteria.departmentName}: ninguna sede tiene un servicio registrado que corresponda a “${run.criteria.keyword}” en las fuentes consultadas, ni un nombre que contenga todas sus palabras.`}
+        </p>
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      {filters}
       <ul className="divide-y rounded-md border">
         {data.items.map((item) => (
-          <ResultRow key={item.companyId} item={item} />
+          <ResultRow key={item.companyId} item={item} keyword={run.criteria.keyword} />
         ))}
       </ul>
       <div className="flex items-center justify-end gap-3 text-sm">
@@ -448,7 +581,8 @@ function Results({ run }: { run: SearchRunDto }) {
           Anterior
         </Button>
         <span>
-          Página {page} de {pages} · {n(data.total)} empresas
+          Página {page} de {pages} · {n(data.total)}{" "}
+          {filtered ? "con estos filtros" : "encontradas"}
         </span>
         <Button
           variant="outline"
@@ -463,7 +597,7 @@ function Results({ run }: { run: SearchRunDto }) {
   );
 }
 
-function ResultRow({ item }: { item: SearchResultItem }) {
+function ResultRow({ item, keyword }: { item: SearchResultItem; keyword: string | null }) {
   const siteName = new Map(item.matchedSites.map((s) => [s.id, s.name]));
   return (
     <li className="space-y-1 p-3 text-sm">
@@ -476,23 +610,66 @@ function ResultRow({ item }: { item: SearchResultItem }) {
           {item.legalName}
         </Link>
         <span className="rounded bg-muted px-1.5 py-0.5 text-xs">
-          {item.isNew ? "Nueva en esta búsqueda" : "Ya estaba en el catálogo"}
+          {PROVIDER_KIND_LABEL[item.providerKind]}
+          {item.providerKind === "otro" && item.providerClass && ` (${item.providerClass})`}
         </span>
+        {item.matchTypes.map((t) => (
+          <span
+            key={t}
+            className={
+              t === "service"
+                ? "rounded bg-primary px-1.5 py-0.5 text-xs text-primary-foreground"
+                : "rounded border px-1.5 py-0.5 text-xs"
+            }
+          >
+            {MATCH_LABEL[t]}
+          </span>
+        ))}
         <span className="text-xs text-muted-foreground">
-          {[item.nit && `NIT ${item.nit}`, [item.city, item.department].filter(Boolean).join(", ")]
+          {[
+            // Solo un NIT se muestra como tal; la cédula de un profesional no se muestra.
+            item.nit && `NIT ${item.nit}`,
+            [item.city, item.department].filter(Boolean).join(", "),
+            item.isNew ? "nueva en esta búsqueda" : "ya estaba en el catálogo",
+          ]
             .filter(Boolean)
             .join(" · ")}
-          {" · "}Fuente: {item.sourceKeys.map((k) => SOURCE_LABELS[k] ?? k).join(", ")}
         </span>
       </div>
-      <div className="text-xs">
-        <span className="text-muted-foreground">
-          {item.matchedSites.length === 1 ? "Sede coincidente: " : "Sedes coincidentes: "}
-        </span>
-        {item.matchedSites
-          .map((s) => `${s.name} (${[s.city, s.address].filter(Boolean).join(", ")})`)
-          .join("; ")}
-      </div>
+      <ul className="space-y-0.5 text-xs">
+        {item.matchedSites.map((s) => (
+          <li key={s.id}>
+            <span className="text-muted-foreground">Sede: </span>
+            {s.name} ({[s.city, s.address].filter(Boolean).join(", ")})
+            {s.services.map((sv) => (
+              <span key={`${sv.sourceKey}-${sv.code}`} className="block pl-3">
+                {sv.kind === "related"
+                  ? `Actividad relacionada con “${keyword}”: ${sv.name}`
+                  : `Servicio de ${sv.name} registrado`}
+                <span className="text-muted-foreground">
+                  {sv.status && ` · habilitado: ${sv.status}`}
+                  {sv.modalities.length > 0 && ` · ${sv.modalities.join(", ")}`}
+                  {` · ${sv.sourceName}`}
+                  {sv.sourceCutoffAt && `, corte ${formatDate(sv.sourceCutoffAt)}`}
+                  {sv.url && (
+                    <>
+                      {" · "}
+                      <a href={sv.url} target="_blank" rel="noreferrer" className="underline">
+                        ver registro
+                      </a>
+                    </>
+                  )}
+                </span>
+              </span>
+            ))}
+            {s.nameMatch && (
+              <span className="block pl-3 text-muted-foreground">
+                Coincidencia por nombre (REPS)
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
       {item.contacts.length === 0 ? (
         <p className="text-xs text-muted-foreground">Sin contactos publicados.</p>
       ) : (

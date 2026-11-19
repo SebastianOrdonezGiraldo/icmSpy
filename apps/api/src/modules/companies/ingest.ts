@@ -19,10 +19,19 @@ export interface IngestItem {
   resolved: ResolvedRecord;
 }
 
+export interface IngestLink {
+  companyId: string;
+  siteId: string | null;
+  sourceRecordId: string;
+  companyIsNew: boolean;
+}
+
 export interface IngestInput {
   sourceId: string;
   searchRunId: string;
   items: IngestItem[];
+  /** Empresa y sede en que quedó cada registro (para escribir evidencias). */
+  onLinked?: (externalId: string, link: IngestLink) => void;
 }
 
 /** Qué cambió en la base. Repetir la misma importación deja todos los "New" en cero. */
@@ -192,21 +201,35 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
           ],
         });
 
-    // 2. Empresa.
+    // 2. Empresa. Identidad: NIT (solo si la fuente lo declara como NIT); si no,
+    // tipo y número de identificación (una cédula sigue siendo cédula); si
+    // tampoco, el código de prestador de la misma fuente. Nunca por nombre.
     const c = resolved.company;
+    const base = {
+      legalName: c.legalName,
+      companyType: c.companyType,
+      cityCode: c.cityCode,
+      city: c.city,
+      department: c.department,
+      identificationType: c.identificationType,
+      identificationNumber: c.identificationNumber,
+      providerClass: c.providerClass,
+      personKind: c.personKind,
+    };
+    const byIdentification =
+      c.identificationType && c.identificationNumber
+        ? and(
+            eq(companies.identificationType, c.identificationType),
+            eq(companies.identificationNumber, c.identificationNumber),
+          )
+        : undefined;
     let companyId: string | undefined;
-    if (c.nit) {
+    if (c.nit || byIdentification) {
       const [created] = await tx
         .insert(companies)
-        .values({
-          nit: c.nit,
-          legalName: c.legalName,
-          companyType: c.companyType,
-          cityCode: c.cityCode,
-          city: c.city,
-          department: c.department,
-        })
-        .onConflictDoNothing({ target: companies.nit, where: sql`${companies.nit} is not null` })
+        .values({ ...base, nit: c.nit })
+        // Cualquier índice único (NIT o identificación) indica que ya existe.
+        .onConflictDoNothing()
         .returning({ id: companies.id });
       if (created) {
         companyId = created.id;
@@ -215,8 +238,17 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
         const [existing] = await tx
           .select({ id: companies.id })
           .from(companies)
-          .where(eq(companies.nit, c.nit));
+          .where(c.nit ? eq(companies.nit, c.nit) : byIdentification)
+          .limit(1);
         companyId = existing?.id;
+        if (!companyId && c.nit && byIdentification) {
+          const [same] = await tx
+            .select({ id: companies.id })
+            .from(companies)
+            .where(byIdentification)
+            .limit(1);
+          companyId = same?.id;
+        }
       }
     } else {
       const [linked] = await tx
@@ -228,16 +260,7 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
         .limit(1);
       companyId = linked?.companyId;
       if (!companyId) {
-        const [created] = await tx
-          .insert(companies)
-          .values({
-            legalName: c.legalName,
-            companyType: c.companyType,
-            cityCode: c.cityCode,
-            city: c.city,
-            department: c.department,
-          })
-          .returning({ id: companies.id });
+        const [created] = await tx.insert(companies).values(base).returning({ id: companies.id });
         companyId = created?.id;
         if (companyId) newCompanies.add(companyId);
       }
@@ -252,6 +275,10 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
           cityCode: sql`coalesce(${companies.cityCode}, ${c.cityCode})`,
           city: sql`coalesce(${companies.city}, ${c.city})`,
           department: sql`coalesce(${companies.department}, ${c.department})`,
+          identificationType: sql`coalesce(${companies.identificationType}, ${c.identificationType})`,
+          identificationNumber: sql`coalesce(${companies.identificationNumber}, ${c.identificationNumber})`,
+          providerClass: sql`coalesce(${companies.providerClass}, ${c.providerClass})`,
+          personKind: sql`coalesce(${companies.personKind}, ${c.personKind})`,
           companyType: sql`case when ${companies.companyType} = 'otro' then ${c.companyType}::company_type else ${companies.companyType} end`,
           updatedAt: sql`now()`,
         })
@@ -262,6 +289,9 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
               sql`${companies.cityCode} is null`,
               sql`${companies.city} is null`,
               sql`${companies.department} is null`,
+              sql`${companies.identificationType} is null`,
+              sql`${companies.providerClass} is null`,
+              sql`${companies.personKind} is null and ${c.personKind}::text is not null`,
               eq(companies.companyType, "otro"),
             ),
           ),
@@ -313,6 +343,12 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
       })
       .onConflictDoNothing();
     if (siteId) matchedSites.add(siteId);
+    input.onLinked?.(raw.externalId, {
+      companyId,
+      siteId,
+      sourceRecordId,
+      companyIsNew: newCompanies.has(companyId),
+    });
 
     // 4. Contactos, salvo los suprimidos y los que no se pudieron interpretar.
     for (const contact of resolved.contacts) {
@@ -372,4 +408,41 @@ export async function ingestRecords(tx: DbExecutor, input: IngestInput): Promise
   stats.contactsExisting = seenContacts.size - newContacts.size;
   stats.contactsSuppressed = suppressedValues.size;
   return stats;
+}
+
+/**
+ * Guarda un registro original (con hash, sin duplicar idénticos) y devuelve su
+ * id. Lo usan las fuentes que no crean empresas, como las de servicios.
+ */
+export async function saveSourceRecord(
+  tx: DbExecutor,
+  input: { sourceId: string; searchRunId: string; raw: RawRecord },
+): Promise<{ id: string; isNew: boolean }> {
+  const hash = payloadHash(input.raw.payload);
+  const [inserted] = await tx
+    .insert(sourceRecords)
+    .values({
+      sourceId: input.sourceId,
+      externalId: input.raw.externalId,
+      payload: input.raw.payload,
+      hash,
+      searchRunId: input.searchRunId,
+    })
+    .onConflictDoNothing({
+      target: [sourceRecords.sourceId, sourceRecords.externalId, sourceRecords.hash],
+    })
+    .returning({ id: sourceRecords.id });
+  if (inserted) return { id: inserted.id, isNew: true };
+  const [existing] = await tx
+    .select({ id: sourceRecords.id })
+    .from(sourceRecords)
+    .where(
+      and(
+        eq(sourceRecords.sourceId, input.sourceId),
+        eq(sourceRecords.externalId, input.raw.externalId),
+        eq(sourceRecords.hash, hash),
+      ),
+    );
+  if (!existing) throw new Error(`No se pudo registrar el original ${input.raw.externalId}`);
+  return { id: existing.id, isNew: false };
 }
